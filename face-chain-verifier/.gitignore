@@ -1,0 +1,174 @@
+# ============================================================
+# FaceChain Sentinel
+# ============================================================
+
+# ============================================================
+# ENV / SECRETS
+# ============================================================
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# ============================================================
+# PYTHON BACKEND
+# ============================================================
+face-chain-verifier/.venv/
+face-chain-verifier/venv/
+face-chain-verifier/env/
+
+face-chain-verifier/__pycache__/
+face-chain-verifier/**/__pycache__/
+*.py[cod]
+
+face-chain-verifier/build/
+face-chain-verifier/dist/
+face-chain-verifier/*.egg-info/
+
+# Python caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ============================================================
+# INSIGHTFACE / ML MODELS
+# ============================================================
+.insightface/
+face-chain-verifier/.insightface/
+
+models/
+face-chain-verifier/models/
+
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# ============================================================
+# FACECHAIN RUNTIME CACHE
+# ============================================================
+cache/
+face-chain-verifier/cache/
+
+.cache/
+
+# Search / result caches
+search_results/
+lens_results/
+
+# ============================================================
+# GENERATED REPORTS
+# ============================================================
+reports/
+face-chain-verifier/reports/
+
+*.log
+
+# ============================================================
+# TEMPORARY FILES / UPLOADS
+# ============================================================
+tmp/
+temp/
+uploads/
+downloaded/
+
+face-chain-verifier/tmp/
+face-chain-verifier/temp/
+face-chain-verifier/uploads/
+
+*.tmp
+*.temp
+
+/.output
+
+# ============================================================
+# FRONTEND / NODE
+# ============================================================
+node_modules/
+
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+bun-debug.log*
+
+dist/
+build/
+
+# Vite
+.vite/
+
+# Next / Nuxt if used later
+.next/
+.nuxt/
+
+# ============================================================
+# IDE
+# ============================================================
+.vscode/
+.idea/
+*.code-workspace
+
+.history/
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# ============================================================
+# JUPYTER
+# ============================================================
+.ipynb_checkpoints/
+
+# ============================================================
+# BLOCKCHAIN BUILD ARTIFACTS
+# ============================================================
+artifacts/
+cache-hardhat/
+typechain/
+
+# ============================================================
+# LOCAL DATABASES
+# ============================================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# LOCAL CONFIG
+# ============================================================
+*.local
+config.local.*
+
+# ============================================================
+# KEEP SAFE EXAMPLE FILES
+# ============================================================
+!face-chain-verifier/examples/
+!face-chain-verifier/examples/**/*.jpg
+!face-chain-verifier/examples/**/*.jpeg
+!face-chain-verifier/examples/**/*.png
+!face-chain-verifier/examples/**/*.webp
+
+# ============================================================
+# LOVABLE / FRONTEND
+# ============================================================
+.lovable/
+
+# ============================================================
+# GENERATED SYSTEM FILES
+# ============================================================
+*.swp
+*.swo
+*~
