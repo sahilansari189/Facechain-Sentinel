@@ -24,6 +24,8 @@ Important:
 * Exact-match candidates are marked with is_exact_match=True.
 * Candidate image URLs prefer the full-size "image" field over
   thumbnails.
+* Google Lens ``google.com/goto`` page redirects are resolved to
+  publisher URLs when possible.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
@@ -96,6 +98,106 @@ def _clean_url(url: str) -> str:
         return ""
 
     return url.strip().split("#", 1)[0].rstrip("/")
+
+
+def _is_google_goto(url: str) -> bool:
+    """Return True when a URL is a Google redirect wrapper."""
+    try:
+        parsed = urlparse(url or "")
+        return (
+            parsed.netloc.lower().endswith("google.com")
+            and parsed.path.startswith("/goto")
+        )
+    except Exception:
+        return False
+
+
+def _extract_redirect_target(url: str) -> str:
+    """Extract a direct target URL when the redirect exposes one."""
+    if not url:
+        return ""
+
+    try:
+        query = parse_qs(urlparse(url).query)
+        for key in ("url", "q", "target", "dest", "destination"):
+            values = query.get(key) or []
+            if values:
+                target = unquote(values[0]).strip()
+                if target.startswith(("http://", "https://")):
+                    return target
+    except Exception:
+        pass
+
+    return ""
+
+
+def _resolve_page_url(url: str, timeout: int = 10) -> str:
+    """Resolve a Google Lens /goto URL to the publisher URL when possible."""
+    url = (url or "").strip()
+
+    if not url or not _is_google_goto(url):
+        return url
+
+    explicit = _extract_redirect_target(url)
+    if explicit and not _is_google_goto(explicit):
+        return explicit
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;"
+            "q=0.9,*/*;q=0.8"
+        ),
+    }
+
+    # Resolve while the Lens result is still fresh.
+    try:
+        response = requests.head(
+            url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        final_url = (response.url or "").strip()
+        if final_url and not _is_google_goto(final_url):
+            return final_url
+    except requests.RequestException:
+        pass
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
+            stream=True,
+        )
+        final_url = (response.url or "").strip()
+        response.close()
+        if final_url and not _is_google_goto(final_url):
+            return final_url
+    except requests.RequestException:
+        pass
+
+    # Keep the original result if Google blocks automated resolution.
+    return explicit or url
+
+
+def _candidate_page_url(row: Dict, timeout: int = 10) -> str:
+    """Choose the best page URL and resolve Google redirect wrappers."""
+    page_url = (
+        row.get("link")
+        or row.get("source_url")
+        or row.get("host_page_url")
+        or row.get("hostPageUrl")
+        or row.get("url")
+        or ""
+    )
+    return _resolve_page_url(page_url, timeout=timeout)
 
 
 def dedupe(
@@ -259,10 +361,9 @@ class SerpApiGoogleLensProvider(
         search_type: str,
     ) -> Candidate:
 
-        page_url = (
-            row.get("link")
-            or row.get("source_url")
-            or ""
+        page_url = _candidate_page_url(
+            row,
+            timeout=min(self.timeout, 10),
         )
 
         # Prefer the actual/full image.
@@ -478,6 +579,15 @@ class SerpApiGoogleLensProvider(
                 candidate.position if candidate.position > 0 else 999999,
             )
         )
+        for candidate in combined:
+            if _is_google_goto(candidate.url):
+                candidate.url = _resolve_page_url(
+                    candidate.url,
+                    timeout=min(self.timeout, 10),
+                )
+                if not candidate.source:
+                    candidate.source = _domain(candidate.url)
+
         return combined[:limit]
 
     # Direct SerpApi Image API upload
@@ -736,6 +846,15 @@ class SerpApiGoogleLensProvider(
                 else 999999,
             )
         )
+
+        for candidate in combined:
+            if _is_google_goto(candidate.url):
+                candidate.url = _resolve_page_url(
+                    candidate.url,
+                    timeout=min(self.timeout, 10),
+                )
+                if not candidate.source:
+                    candidate.source = _domain(candidate.url)
 
         return combined[:limit]
 

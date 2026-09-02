@@ -28,6 +28,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+import requests
 
 sys.path.insert(
     0,
@@ -341,6 +344,116 @@ def _search_local_with_serpapi(provider, image_path, limit):
     return None
 
 
+def _is_google_goto_url(url: str) -> bool:
+    """Return True when Google gives us a /goto intermediary URL."""
+    if not url:
+        return False
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    return (
+        parsed.netloc.lower().endswith("google.com")
+        and parsed.path.lower().rstrip("/").endswith("/goto")
+    )
+
+
+def _extract_goto_target(url: str) -> str:
+    """Extract a directly embedded target URL when available."""
+    try:
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+    except Exception:
+        return ""
+
+    for key in ("url", "q", "target"):
+        values = query.get(key) or []
+        if values:
+            target = unquote(values[0]).strip()
+            if target.startswith(("http://", "https://")):
+                return target
+
+    return ""
+
+
+def _resolve_page_url(url: str, timeout: float) -> str:
+    """Resolve a Google /goto URL to its real source page when possible."""
+    if not url or not _is_google_goto_url(url):
+        return url
+
+    embedded = _extract_goto_target(url)
+    if embedded:
+        return embedded
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/139.0 Safari/537.36"
+        )
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=max(2.0, min(float(timeout), 10.0)),
+            allow_redirects=True,
+            stream=True,
+        )
+        resolved = response.url.strip()
+        response.close()
+
+        if resolved and not _is_google_goto_url(resolved):
+            return resolved
+    except requests.RequestException:
+        pass
+
+    return url
+
+
+def _candidate_page_url(candidate, timeout: float) -> str:
+    """Prefer a real source/canonical page over Google's /goto URL."""
+    url = getattr(candidate, "url", "") or ""
+    resolved = _resolve_page_url(url, timeout)
+
+    metadata = getattr(candidate, "page_metadata", None) or {}
+    canonical = (
+        metadata.get("canonical_url")
+        or metadata.get("source_url")
+        or ""
+    )
+
+    if canonical and not _is_google_goto_url(canonical):
+        return canonical
+
+    return resolved
+
+
+
+def _source_image_url(page_meta, page_url: str) -> str:
+    """Return a real source-page image URL when metadata exposes one.
+
+    SerpApi/Lens image URLs are temporary proxy/cache URLs and should not be
+    treated as the authoritative image URL.  The candidate fetcher already
+    extracts og:image when it can; keep the selection centralized here.
+    """
+    meta = page_meta or {}
+    for key in (
+        "og_image",
+        "twitter_image",
+        "image_url",
+        "image",
+    ):
+        value = meta.get(key)
+        if isinstance(value, str) and value.strip():
+            value = value.strip()
+            if not _is_google_goto_url(value):
+                return value
+    return ""
+
 
 # ============================================================
 # Main
@@ -629,9 +742,14 @@ def run_single(args, cfg) -> int:
             f"  {label}"
         )
 
+        display_page_url = _resolve_page_url(
+            candidate.url,
+            cfg.http_timeout,
+        )
+
         print(
             f"    Page URL : "
-            f"{candidate.url or '(none)'}"
+            f"{display_page_url or '(none)'}"
         )
 
         print(
@@ -760,7 +878,7 @@ def run_single(args, cfg) -> int:
 
                 page_meta, metadata_error = (
                     fetch_page_metadata(
-                        candidate.url,
+                        display_page_url,
                         cfg.http_timeout,
                     )
                 )
@@ -859,7 +977,11 @@ def run_single(args, cfg) -> int:
                                 f"({len(og_faces)} face(s))"
                             )
 
-                            if og_sim > best_sim:
+                            # Prefer a verified image fetched from the source page
+                            # over SerpApi's temporary Lens proxy.  It is acceptable
+                            # for its score to be lower than the proxy as long as it
+                            # independently clears the configured match threshold.
+                            if og_sim >= cfg.match_threshold:
 
                                 best_sim = og_sim
                                 best_data = og_data
@@ -895,6 +1017,16 @@ def run_single(args, cfg) -> int:
         # ----------------------------------------------------
         # Candidate result
         # ----------------------------------------------------
+
+        # Prefer the actual source-page image over SerpApi's Lens proxy.
+        source_image_url = _source_image_url(
+            page_meta,
+            display_page_url,
+        )
+        if source_image_url:
+            print(
+                f"    Source image: {source_image_url}"
+            )
 
         if best_sim < 0:
 
@@ -1003,9 +1135,14 @@ def run_single(args, cfg) -> int:
                 f"via {image_source}"
             )
 
+            page_url = _candidate_page_url(
+                item.candidate,
+                cfg.http_timeout,
+            )
+
             print(
                 f"      Page : "
-                f"{item.candidate.url}"
+                f"{page_url}"
             )
 
             print(
@@ -1032,7 +1169,10 @@ def run_single(args, cfg) -> int:
 
         debug["scores"].append(
             {
-                "url": item.candidate.url,
+                "url": _candidate_page_url(
+                    item.candidate,
+                    cfg.http_timeout,
+                ),
                 "image_url": item.candidate.image_url,
                 "matched_image_url": getattr(
                     item,
@@ -1099,7 +1239,10 @@ def run_single(args, cfg) -> int:
 
             kv(
                 "Page",
-                best.candidate.url,
+                _candidate_page_url(
+                    best.candidate,
+                    cfg.http_timeout,
+                ),
             )
 
             kv(
@@ -1159,9 +1302,14 @@ def run_single(args, cfg) -> int:
         or "unknown",
     )
 
+    match_page_url = _candidate_page_url(
+        match.candidate,
+        cfg.http_timeout,
+    )
+
     kv(
         "URL",
-        match.candidate.url,
+        match_page_url,
     )
 
     kv(
@@ -1190,8 +1338,10 @@ def run_single(args, cfg) -> int:
         "matching post extraction"
     )
 
+    # Fetch metadata from the resolved source page, not a Google
+    # /goto intermediary URL returned by Lens.
     page_meta, err = fetch_page_metadata(
-        match.candidate.url,
+        match_page_url,
         cfg.http_timeout,
     )
 
@@ -1205,6 +1355,14 @@ def run_single(args, cfg) -> int:
         match.candidate,
         page_meta,
     )
+
+    # Prefer the real source/canonical page over Google's /goto URL.
+    if match_page_url and not _is_google_goto_url(match_page_url):
+        record["source_url"] = match_page_url
+        record["canonical_url"] = (
+            page_meta.get("canonical_url")
+            or match_page_url
+        )
 
     # Face verification metadata.
     record[
@@ -1238,6 +1396,12 @@ def run_single(args, cfg) -> int:
     )
 
     if verified_image_url:
+
+        # Preserve the actual matched image URL instead of exposing
+        # SerpApi's temporary image proxy URL as the source image.
+        record[
+            "image_url"
+        ] = verified_image_url
 
         record[
             "verified_image_url"
