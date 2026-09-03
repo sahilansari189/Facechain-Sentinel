@@ -228,6 +228,11 @@ def update_progress_from_output(
             "VERIFIED - DATA INTEGRITY CONFIRMED",
             "Verification complete",
             100,
+        ), 
+        (
+            "BLOCKCHAIN EVIDENCE VERIFIED",
+            "Verification complete",
+            100,
         ),
     ]
 
@@ -374,6 +379,7 @@ def parse_pipeline_output(
             "transaction": None,
             "block": None,
             "explorer": None,
+            "evidence_id": None,
         },
     }
 
@@ -607,8 +613,8 @@ def parse_pipeline_output(
         result["blockchain"]["anchored"] = True
 
     if (
-        "VERIFIED - DATA INTEGRITY CONFIRMED"
-        in output
+        "VERIFIED - DATA INTEGRITY CONFIRMED" in output
+        or "VERIFIED - DATA + IMAGE INTEGRITY CONFIRMED" in output
     ):
         result["blockchain"]["verified"] = True
 
@@ -641,6 +647,14 @@ def parse_pipeline_output(
         result["blockchain"][
             "explorer"
         ] = explorer_match.group(1)
+
+    evidence_match = re.search(
+        r"Evidence bundle\s+(.+)", output, re.IGNORECASE
+    )
+    if evidence_match:
+        result["blockchain"]["evidence_id"] = Path(
+            evidence_match.group(1).strip()
+        ).name
 
     # --------------------------------------------------------
     # OVERALL STATUS
@@ -683,7 +697,6 @@ def run_verification_job(
         str(MAIN_PY),
         "--image",
         str(temp_path),
-        "--no-chain",
     ]
 
     stdout = ""
@@ -962,6 +975,98 @@ def run_verification_job(
             )
         except Exception:
             pass
+
+
+# ============================================================
+# INDEPENDENT EVIDENCE RE-VERIFICATION
+# ============================================================
+
+EVIDENCE_ROOT = (BASE_DIR / "evidence").resolve()
+
+
+def _safe_evidence_path(evidence_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", evidence_id):
+        raise HTTPException(status_code=400, detail="Invalid evidence ID.")
+    path = (EVIDENCE_ROOT / evidence_id).resolve()
+    if EVIDENCE_ROOT not in path.parents:
+        raise HTTPException(status_code=400, detail="Invalid evidence path.")
+    return path
+
+
+@app.post("/api/reverify")
+def reverify_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    evidence_id = str(payload.get("evidence_id", "")).strip()
+    if not evidence_id:
+        raise HTTPException(status_code=400, detail="evidence_id is required.")
+
+    bundle = _safe_evidence_path(evidence_id)
+    if not (bundle / "metadata.json").exists():
+        raise HTTPException(status_code=404, detail="Evidence bundle not found.")
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    command = [
+        sys.executable,
+        str(MAIN_PY),
+        "--reverify",
+        str(bundle),
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(BASE_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PROCESS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Evidence re-verification timed out.") from exc
+
+    output = completed.stdout or ""
+    if completed.returncode not in {0, 6}:
+        raise HTTPException(
+            status_code=500,
+            detail=(completed.stderr or output or "Evidence re-verification failed."),
+        )
+
+    # Parse ONLY the explicit verification-status lines.
+    # Do not use the raw "Metadata hash" / "Image hash" labels above,
+    # because the CLI prints saved, on-chain, and recomputed values first.
+    def status_after(label: str) -> bool:
+        pattern = rf"^\s*{re.escape(label)}\s+(✓ MATCH|✗ MISMATCH)\s*$"
+        match = re.search(pattern, output, re.IGNORECASE | re.MULTILINE)
+        return bool(match and match.group(1).strip().upper().endswith("MATCH"))
+
+    metadata_hash_match = status_after("Metadata hash")
+    image_hash_match = status_after("Image hash")
+    source_url_match = status_after("Source URL")
+
+    # A successful subprocess is not the same thing as successful
+    # evidence verification. All three independent checks must pass.
+    verified = (
+        completed.returncode == 0
+        and metadata_hash_match
+        and image_hash_match
+        and source_url_match
+    )
+
+    return {
+        "success": verified,
+        "verified": verified,
+        "evidence_id": evidence_id,
+        "metadata_hash_match": metadata_hash_match,
+        "image_hash_match": image_hash_match,
+        "source_url_match": source_url_match,
+        "output": output,
+        "status": "verified" if verified else "tampered",
+    }
 
 
 # ============================================================

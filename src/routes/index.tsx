@@ -86,6 +86,7 @@ type VerifyResult = {
     transaction?: string | null;
     block?: number | null;
     explorer?: string | null;
+    evidence_id?: string | null;
   };
 
   status?: string;
@@ -171,6 +172,13 @@ function Index() {
 
   const [response, setResponse] = useState<VerifyResponse | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [isReverifying, setIsReverifying] = useState(false);
+  const [reverifyResult, setReverifyResult] = useState<{
+    verified?: boolean;
+    metadata_hash_match?: boolean;
+    image_hash_match?: boolean;
+    source_url_match?: boolean;
+  } | null>(null);
 
   const result = response?.result;
 
@@ -194,6 +202,7 @@ function Index() {
     setError(null);
     setResponse(null);
     setJobId(null);
+    setReverifyResult(null);
 
     if (!file) {
       setSelectedFile(null);
@@ -254,6 +263,7 @@ function Index() {
     setResponse(null);
     setError(null);
     setJobId(null);
+    setReverifyResult(null);
     setIsVerifying(false);
 
     if (pollTimerRef.current !== null) {
@@ -383,6 +393,7 @@ function Index() {
     setError(null);
     setResponse(null);
     setJobId(null);
+    setReverifyResult(null);
 
     if (pollTimerRef.current !== null) {
       window.clearTimeout(pollTimerRef.current);
@@ -484,6 +495,48 @@ function Index() {
             : "An unexpected verification error occurred.",
         );
       }
+    }
+  };
+
+  const reverifyEvidence = async () => {
+    const evidenceId = result?.blockchain?.evidence_id;
+    if (!evidenceId || isReverifying) return;
+
+    setIsReverifying(true);
+    setError(null);
+    setReverifyResult(null);
+
+    try {
+      const apiResponse = await fetch(`${API_BASE}/api/reverify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ evidence_id: evidenceId }),
+      });
+
+      const data = await apiResponse.json();
+
+      if (!apiResponse.ok) {
+        throw new Error(
+          data.detail || data.error || "Evidence re-verification failed.",
+        );
+      }
+
+      setReverifyResult(data);
+
+      if (!data.verified) {
+        setError("Evidence has changed since it was anchored on-chain.");
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to re-verify blockchain evidence.",
+      );
+    } finally {
+      setIsReverifying(false);
     }
   };
 
@@ -1171,7 +1224,7 @@ function Index() {
                                 ? "The verification record was independently verified."
                                 : result.blockchain.anchored
                                   ? "A blockchain transaction was created for this record."
-                                  : "API integration currently runs with --no-chain."}
+                                  : "No blockchain evidence is available for this result."}
                             </p>
                           </div>
                         </div>
@@ -1215,6 +1268,64 @@ function Index() {
                             View blockchain explorer
                             <ExternalLink className="h-3 w-3" />
                           </a>
+                        )}
+
+                        {result.blockchain.evidence_id && (
+                          <div className="mt-4 border-t border-slate-200 pt-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Evidence bundle</p>
+                                <p className="mt-1 font-mono text-xs text-slate-600">{result.blockchain.evidence_id}</p>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={reverifyEvidence}
+                                disabled={isReverifying}
+                                className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                              >
+                                {isReverifying ? (
+                                  <>
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    Re-verifying…
+                                  </>
+                                ) : (
+                                  <>
+                                    <Fingerprint className="h-3.5 w-3.5" />
+                                    Re-verify evidence
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            {reverifyResult && (
+                              <div className={`mt-4 rounded-xl border p-4 ${reverifyResult.verified ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}>
+                                <div className="flex items-center gap-2">
+                                  {reverifyResult.verified ? (
+                                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                                  ) : (
+                                    <AlertCircle className="h-5 w-5 text-red-600" />
+                                  )}
+                                  <p className="text-sm font-semibold">
+                                    {reverifyResult.verified ? "Blockchain evidence verified" : "Evidence verification failed"}
+                                  </p>
+                                </div>
+
+                                <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                                  {[
+                                    ["Metadata hash", reverifyResult.metadata_hash_match],
+                                    ["Image hash", reverifyResult.image_hash_match],
+                                    ["Source URL", reverifyResult.source_url_match],
+                                  ].map(([label, matched]) => (
+                                    <div key={String(label)} className="rounded-lg bg-white/70 px-3 py-2">
+                                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
+                                      <p className="mt-1 text-xs font-semibold">{matched ? "✓ MATCH" : "✗ MISMATCH"}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>

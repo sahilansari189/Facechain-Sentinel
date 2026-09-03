@@ -124,6 +124,14 @@ def parse_args(argv=None):
     )
 
     p.add_argument(
+        "--reverify",
+        metavar="PATH",
+        help=(
+            "re-verify a previously saved evidence bundle"
+        ),
+    )
+
+    p.add_argument(
         "--threshold",
         type=float,
         default=None,
@@ -250,11 +258,14 @@ def parse_args(argv=None):
 
     args = p.parse_args(argv)
 
-    if not args.image and not args.batch:
+    if not args.image and not args.batch and not args.reverify:
         p.error(
             "provide --image PATH for a single run, "
-            "or --batch PATH... for batch mode"
+            "--batch PATH... for batch mode, or --reverify PATH"
         )
+
+    if sum(bool(value) for value in (args.image, args.batch, args.reverify)) > 1:
+        p.error("use only one of --image, --batch, or --reverify")
 
     return args
 
@@ -456,6 +467,236 @@ def _source_image_url(page_meta, page_url: str) -> str:
 
 
 # ============================================================
+# Evidence bundle helpers
+# ============================================================
+
+EVIDENCE_DIR = Path("evidence")
+
+
+def _safe_evidence_id(value: str) -> str:
+    """Validate an evidence directory name and prevent path traversal."""
+    candidate = Path(value)
+    if candidate.name != value or value in {"", ".", ".."}:
+        raise ValueError("invalid evidence id")
+    if any(part in {".", ".."} for part in candidate.parts):
+        raise ValueError("invalid evidence id")
+    return value
+
+
+def save_evidence_bundle(
+    record: dict,
+    data_hash: str,
+    image_hash: str,
+    image_bytes: bytes | None,
+    *,
+    evidence_id: str | None = None,
+) -> Path:
+    """Persist the exact metadata and matched image used for anchoring."""
+    import secrets
+
+    bundle_id = _safe_evidence_id(evidence_id) if evidence_id else secrets.token_hex(12)
+    bundle = EVIDENCE_DIR / bundle_id
+    bundle.mkdir(parents=True, exist_ok=True)
+
+    (bundle / "metadata.json").write_text(
+        json.dumps(
+            {
+                "record": record,
+                "fingerprints": {
+                    "metadata_sha256": data_hash,
+                    "image_sha256": image_hash,
+                },
+                "blockchain": None,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    if image_bytes:
+        (bundle / "matched_image.bin").write_bytes(image_bytes)
+
+    return bundle
+
+
+def update_evidence_blockchain(bundle: Path, tx: dict, verifier) -> None:
+    """Add immutable-chain reference information without changing the hashed record."""
+    metadata_path = bundle / "metadata.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload["blockchain"] = {
+        "network": "Ethereum Sepolia",
+        "chain_id": int(verifier.w3.eth.chain_id),
+        "contract_address": str(verifier.config.contract_address)
+        if hasattr(verifier, "config") and hasattr(verifier.config, "contract_address")
+        else "",
+        "record_id": tx.get("record_id"),
+        "transaction": tx.get("tx_hash"),
+        "block": tx.get("block_number"),
+        "explorer": tx.get("explorer_url"),
+    }
+    metadata_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _normalize_hash(value: Any) -> str:
+    """Normalize SHA-256/bytes32 values for representation-independent comparison."""
+    if value is None:
+        return ""
+
+    text = str(value).strip().lower()
+    if text.startswith("0x"):
+        text = text[2:]
+    return text
+
+
+def run_reverify(args, cfg) -> int:
+    """Independently re-hash saved evidence and compare it with Ethereum."""
+    try:
+        bundle = Path(args.reverify).resolve()
+        evidence_root = EVIDENCE_DIR.resolve()
+        if evidence_root not in bundle.parents:
+            fail("Evidence path must be inside the evidence/ directory.")
+            return 2
+
+        metadata_path = bundle / "metadata.json"
+        if not metadata_path.exists():
+            fail(f"Evidence metadata not found: {metadata_path}")
+            return 2
+
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        record = payload.get("record")
+        stored_fingerprints = payload.get("fingerprints") or {}
+        blockchain = payload.get("blockchain") or {}
+
+        if not isinstance(record, dict):
+            fail("Evidence metadata.json does not contain a valid record.")
+            return 2
+
+        cfg.require_chain(need_key=False)
+        verifier = BlockchainVerifier(cfg)
+
+        record_id = blockchain.get("record_id")
+        data_hash_hint = stored_fingerprints.get("metadata_sha256") or None
+
+        banner("independent blockchain re-verification")
+        step("Loading evidence from disk...")
+
+        # Recompute directly from the saved evidence. This is deliberately
+        # independent of the original in-memory verification result.
+        recomputed_data_hash = sha256_canonical_json(record)
+        image_path = bundle / "matched_image.bin"
+        recomputed_image_hash = (
+            sha256_bytes(image_path.read_bytes())
+            if image_path.exists()
+            else ""
+        )
+
+        # Verify that the evidence bundle itself has not changed.
+        saved_data_hash = _normalize_hash(
+            stored_fingerprints.get("metadata_sha256")
+        )
+        saved_image_hash = _normalize_hash(
+            stored_fingerprints.get("image_sha256")
+        )
+        local_metadata_consistent = (
+            bool(saved_data_hash)
+            and _normalize_hash(recomputed_data_hash) == saved_data_hash
+        )
+        local_image_consistent = (
+            saved_image_hash == _normalize_hash(recomputed_image_hash)
+            if saved_image_hash
+            else not recomputed_image_hash
+        )
+
+        step("Reading the anchored record from Ethereum...")
+        onchain = verifier.read_back(data_hash_hint, record_id)
+
+        # Solidity bytes32 values may be returned with a 0x prefix, while
+        # the local SHA-256 helper returns plain hexadecimal. Compare the
+        # normalized hexadecimal value rather than its display format.
+        metadata_match = (
+            local_metadata_consistent
+            and _normalize_hash(recomputed_data_hash)
+            == _normalize_hash(onchain.data_hash)
+        )
+
+        image_match = (
+            local_image_consistent
+            and _normalize_hash(recomputed_image_hash)
+            == _normalize_hash(onchain.image_hash)
+        )
+
+        source_match = (
+            str(record.get("source_url", "")).strip()
+            == str(onchain.source_url or "").strip()
+        )
+
+        kv("Record ID", record_id if record_id is not None else "—")
+        kv("Network", f"chainId {verifier.w3.eth.chain_id}")
+
+        print(
+            f"\n  Metadata hash (saved):\n"
+            f"  {stored_fingerprints.get('metadata_sha256') or 'unavailable'}\n"
+        )
+        print(
+            f"  Metadata hash (on-chain):\n"
+            f"  {onchain.data_hash}\n"
+        )
+        print(
+            f"  Metadata hash (recomputed):\n"
+            f"  {recomputed_data_hash}\n"
+        )
+        kv(
+            "Metadata evidence",
+            "✓ CONSISTENT" if local_metadata_consistent else "✗ CHANGED",
+        )
+        kv(
+            "Metadata hash",
+            "✓ MATCH" if metadata_match else "✗ MISMATCH",
+        )
+
+        print(
+            f"\n  Image hash (saved):\n"
+            f"  {stored_fingerprints.get('image_sha256') or 'unavailable'}\n"
+        )
+        print(
+            f"  Image hash (on-chain):\n"
+            f"  {onchain.image_hash or '0x0 / unavailable'}\n"
+        )
+        print(
+            f"  Image hash (recomputed):\n"
+            f"  {recomputed_image_hash or 'unavailable'}\n"
+        )
+        kv(
+            "Image evidence",
+            "✓ CONSISTENT" if local_image_consistent else "✗ CHANGED",
+        )
+        kv(
+            "Image hash",
+            "✓ MATCH" if image_match else "✗ MISMATCH",
+        )
+        kv(
+            "Source URL",
+            "✓ MATCH" if source_match else "✗ MISMATCH",
+        )
+        kv("Transaction", blockchain.get("transaction") or "—")
+        kv("Block", blockchain.get("block") or "—")
+
+        if metadata_match and image_match and source_match:
+            print("\n  Result:\n  ✓ BLOCKCHAIN EVIDENCE VERIFIED\n")
+            return 0
+
+        print("\n  Result:\n  ✗ VERIFICATION FAILED - EVIDENCE HAS CHANGED\n")
+        return 6
+
+    except (ChainError, ConfigError, ValueError, OSError, json.JSONDecodeError) as exc:
+        fail(str(exc))
+        return 6
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -466,6 +707,9 @@ def main(argv=None) -> int:
         load_config(),
         args,
     )
+
+    if args.reverify:
+        return run_reverify(args, cfg)
 
     if args.batch:
         return run_batch(
@@ -1486,6 +1730,15 @@ def run_single(args, cfg) -> int:
         record
     )
 
+    # Persist the exact evidence used to calculate both fingerprints.
+    evidence_bundle = save_evidence_bundle(
+        record,
+        data_hash,
+        image_hash,
+        match.image_bytes,
+    )
+    kv("Evidence bundle", evidence_bundle)
+
     if args.save_results:
 
         _save_debug(
@@ -1563,6 +1816,13 @@ def run_single(args, cfg) -> int:
             tx["explorer_url"],
         )
 
+        update_evidence_blockchain(
+            evidence_bundle,
+            tx,
+            verifier,
+        )
+        kv("Evidence bundle", evidence_bundle)
+
     except (
         ChainError,
         ConfigError,
@@ -1628,23 +1888,31 @@ def run_single(args, cfg) -> int:
             onchain.submitter,
         )
 
-        if BlockchainVerifier.compare(
+        metadata_match = BlockchainVerifier.compare(
             recomputed,
             onchain.data_hash,
-        ):
+        )
+        image_match = (
+            image_hash == (onchain.image_hash or "")
+            if onchain.image_hash
+            else not image_hash
+        )
+        source_match = str(record.get("source_url", "")) == str(onchain.source_url)
 
+        kv("Metadata hash", "✓ MATCH" if metadata_match else "✗ MISMATCH")
+        kv("Image hash", "✓ MATCH" if image_match else "✗ MISMATCH")
+        kv("Source URL", "✓ MATCH" if source_match else "✗ MISMATCH")
+
+        if metadata_match and image_match and source_match:
             print(
                 "\n  Result:\n"
-                "  ✅ VERIFIED - "
-                "DATA INTEGRITY CONFIRMED\n"
+                "  ✅ VERIFIED - DATA + IMAGE INTEGRITY CONFIRMED\n"
             )
-
             return 0
 
         print(
             "\n  Result:\n"
-            "  ❌ VERIFICATION FAILED - "
-            "DATA HAS CHANGED\n"
+            "  ❌ VERIFICATION FAILED - EVIDENCE HAS CHANGED\n"
         )
 
         return 6

@@ -1,0 +1,34 @@
+{
+  "record": {
+    "source_url": "https://findinfluencer.in/sahil72",
+    "platform": "Findinfluencer",
+    "title": "Hire Sahil Ansari verified influener from Allahabad | Get Price & Book Now",
+    "description": "Hire Sahil Ansari for promotion, Find Influencer have 50000+ Influencer in all over India.",
+    "image_url": "https://findinfluencer.in/storage/user/profile/pic/1527profile-pic.jpg",
+    "site_name": "Findinfluencer",
+    "published_time": "",
+    "author": "",
+    "canonical_url": "https://findinfluencer.in/sahil72",
+    "retrieved_at": "2026-09-02T16:01:52+00:00",
+    "is_exact_match": true,
+    "search_type": "exact_matches",
+    "similarity": 1.0,
+    "match_threshold": 0.45,
+    "search_provider": "serpapi",
+    "verified_image_url": "https://findinfluencer.in/storage/user/profile/pic/1527profile-pic.jpg",
+    "verified_image_source": "og_image"
+  },
+  "fingerprints": {
+    "metadata_sha256": "9a39ca9bed409da8c830e83188b2b51da83ea24d73543611de0e090ee5f99735",
+    "image_sha256": "bfd08e4c3db8c592392d4daf4ceb54551ba60ec54f7e56b444c5d20er9e21afa"
+  },
+  "blockchain": {
+    "network": "Ethereum Sepolia",
+    "chain_id": 11155111,
+    "contract_address": "",
+    "record_id": 21,
+    "transaction": "0x0c71a7b3a359cd832ad880a24255d08957d59d19b064af804774c71d4f716362",
+    "block": 11620615,
+    "explorer": "https://sepolia.etherscan.io/tx/0x0c71a7b3a359cd832ad880a24255d08957d59d19b064af804774c71d4f716362"
+  }
+}

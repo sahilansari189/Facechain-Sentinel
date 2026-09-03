@@ -97,9 +97,154 @@ python src/main.py --image examples/input.webp --no-chain
 
 Useful options include `--provider serpapi|bing|tineye`, `--threshold 0.5`, `--face-index 1`, `--max-candidates 30`, and `--save-results`. Batch processing is available with `--batch PATH...`; see the [verifier README](face-chain-verifier/README.md#batch-mode-50-100-images) for checkpointing, reports, and Merkle-root anchoring.
 
+## Evidence Re-verification
+
+Normal API verification runs the blockchain step and creates an evidence bundle for every successful match under `evidence/<evidence-id>/`:
+
+```text
+evidence/<evidence-id>/
+├── metadata.json
+└── matched_image.bin       # present when an image was available
+```
+
+The metadata hash is computed from the saved `record` object, and the image hash is computed from the saved matched-image bytes. Blockchain transaction details are added to `metadata.json` without changing the hashed `record` object. This keeps the original evidence independently reproducible while retaining its transaction reference.
+
+Re-verify an evidence bundle from the CLI with:
+
+```powershell
+python src/main.py --reverify evidence/<evidence-id>
+```
+
+Re-verification loads `metadata.json` and `matched_image.bin` from disk, recomputes both SHA-256 fingerprints, reads the anchored record from Ethereum, and compares:
+
+- The metadata hash.
+- The image hash, when an image was saved.
+- The source URL.
+
+The web API exposes the same operation:
+
+```http
+POST /api/reverify
+Content-Type: application/json
+
+{"evidence_id":"<evidence-id>"}
+```
+
+The web interface includes a **Re-verify evidence** button and displays separate match or mismatch result cards for the metadata hash, image hash, and source URL.
+
+### Blockchain read-back
+
+After the transaction is mined, the CLI reads the blockchain record back and compares the saved evidence with the on-chain values:
+
+```text
+Local Metadata Hash       -> On-chain Data Hash
+Local Image Hash          -> On-chain Image Hash
+Local Source URL          -> On-chain Source URL
+```
+
+A successful read-back reports:
+
+```text
+ON-CHAIN DATA HASH     MATCH
+ON-CHAIN IMAGE HASH    MATCH
+SOURCE URL             MATCH
+
+FINAL RESULT
+BLOCKCHAIN EVIDENCE VERIFIED
+```
+
+### Independent re-verification
+
+Saved evidence can be checked later without repeating the face search. From the `face-chain-verifier` directory, run:
+
+```powershell
+python src/main.py --reverify "evidence\<EVIDENCE_ID>"
+```
+
+For example:
+
+```powershell
+python src/main.py --reverify "evidence\8f3a7c91e2b4"
+```
+
+The CLI loads `metadata.json` and `matched_image.bin`, independently recalculates their SHA-256 fingerprints, reads the original Ethereum record, and reports `MATCH` or `MISMATCH` for the metadata hash, image hash, and source URL.
+
+The expected successful exit code is `0`. In PowerShell, inspect it with:
+
+```powershell
+$LASTEXITCODE
+```
+
+The verification flow is:
+
+```text
+Saved Evidence -> Recalculate SHA-256 -> Read Ethereum Record -> Compare -> MATCH / MISMATCH
+```
+
+### Tamper demonstration
+
+1. Run a normal verification and note the evidence bundle ID.
+2. Edit the `record` object in `evidence/<evidence-id>/metadata.json`.
+3. Click **Re-verify evidence** or run the CLI command above.
+4. The metadata hash and source URL should report `MISMATCH`, while the blockchain record remains unchanged.
+
+Expected result:
+
+```text
+ON-CHAIN DATA HASH     MISMATCH
+ON-CHAIN IMAGE HASH    MATCH
+SOURCE URL             MISMATCH
+
+FINAL RESULT
+BLOCKCHAIN EVIDENCE TAMPERED
+```
+
+Evidence tampering returns exit code `6`.
+
+For an image tamper test, modify `evidence/<evidence-id>/matched_image.bin`. The image hash should then report `MISMATCH`.
+
+Expected image-tamper result:
+
+```text
+ON-CHAIN DATA HASH     MATCH
+ON-CHAIN IMAGE HASH    MISMATCH
+SOURCE URL             MATCH
+
+FINAL RESULT
+BLOCKCHAIN EVIDENCE TAMPERED
+```
+
+### Verification example
+
+Run a normal verification:
+
+```powershell
+python src/main.py --image "C:\images\test.jpg"
+```
+
+After it completes, list the generated bundles and independently verify one:
+
+```powershell
+Get-ChildItem .\evidence\
+python src/main.py --reverify "evidence\8f3a7c91e2b4"
+```
+
+Expected result:
+
+```text
+BLOCKCHAIN EVIDENCE VERIFIED
+```
+
 ## Blockchain Used
 
-The project uses the **Ethereum Sepolia testnet** (`chain ID 11155111`) and a Solidity `0.8.20` contract at [face-chain-verifier/contracts/FaceVerification.sol](face-chain-verifier/contracts/FaceVerification.sol).
+The project uses the **Ethereum Sepolia testnet**:
+
+```text
+Chain ID: 11155111
+Contract: 0x7801548f318dB4517103035A9c129F2d4EdF2dCD
+```
+
+The contract is implemented in Solidity `0.8.20` at [face-chain-verifier/contracts/FaceVerification.sol](face-chain-verifier/contracts/FaceVerification.sol).
 
 Only compact verification data is stored on-chain:
 
@@ -107,7 +252,7 @@ Only compact verification data is stored on-chain:
 - `imageHash`: SHA-256 of the matched image bytes.
 - `sourceUrl`, block timestamp, and submitting address.
 
-Images, face embeddings, API credentials, and full page contents are not stored on-chain. Deploy the contract with:
+The raw image and face embedding are not stored on-chain. Deploy a new instance with:
 
 ```powershell
 cd face-chain-verifier
@@ -128,6 +273,14 @@ pytest -q
 ```
 
 The web project also provides `npm run lint` and `npm run build`.
+
+## CLI Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Evidence verified successfully. |
+| `6` | Evidence tampering detected during re-verification. |
+| Other non-zero codes | Verification, configuration, search, or blockchain error. |
 
 ## Known Limitations
 
