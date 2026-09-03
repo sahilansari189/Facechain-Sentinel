@@ -1,0 +1,26 @@
+{
+  "record": {
+    "source_url": "https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fgroups%2F457942055525947%2F",
+    "platform": "Facebook",
+    "title": "Facebook",
+    "description": "",
+    "image_url": "https://serpapi.com/searches/6a98e0822328e1ce66101d35/images/qZSplgByHrYgjgufT5eBMrFxOkk8GjNSNPSZjqt4ojc.jpeg",
+    "site_name": "",
+    "published_time": "",
+    "author": "",
+    "canonical_url": "https://hi-in.facebook.com/login",
+    "retrieved_at": "2026-09-03T02:51:01+00:00",
+    "is_exact_match": true,
+    "search_type": "exact_matches",
+    "similarity": 0.949905,
+    "match_threshold": 0.45,
+    "search_provider": "serpapi",
+    "verified_image_url": "https://serpapi.com/searches/6a98e0822328e1ce66101d35/images/qZSplgByHrYgjgufT5eBMrFxOkk8GjNSNPSZjqt4ojc.jpeg",
+    "verified_image_source": "lens_image"
+  },
+  "fingerprints": {
+    "metadata_sha256": "7bcb81694e26301879e67998551190d0e6aa23fbd6e04e8783e9e61aeabeb372",
+    "image_sha256": "3f2a1a8a29f6617487b19e5591a229896744dec2d590291ee907df3d3846ab7d"
+  },
+  "blockchain": null
+}

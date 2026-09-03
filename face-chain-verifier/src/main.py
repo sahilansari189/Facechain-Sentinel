@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -444,12 +445,26 @@ def _candidate_page_url(candidate, timeout: float) -> str:
 
 
 
-def _source_image_url(page_meta, page_url: str) -> str:
-    """Return a real source-page image URL when metadata exposes one.
+def _is_proxy_image_url(url: str) -> bool:
+    """Return True for temporary reverse-search/provider image URLs."""
+    if not url:
+        return False
+    try:
+        host = (urlparse(url).netloc or "").lower()
+    except Exception:
+        return False
+    return (
+        "serpapi.com" in host
+        or "lens.google.com" in host
+        or "googleusercontent.com" in host
+    )
 
-    SerpApi/Lens image URLs are temporary proxy/cache URLs and should not be
-    treated as the authoritative image URL.  The candidate fetcher already
-    extracts og:image when it can; keep the selection centralized here.
+
+def _source_image_url(page_meta, page_url: str) -> str:
+    """Return an original source-page image URL when metadata exposes one.
+
+    Provider/Lens image URLs are temporary cache/proxy URLs. They must not be
+    presented as the original Instagram, LinkedIn, or X image URL.
     """
     meta = page_meta or {}
     for key in (
@@ -461,7 +476,10 @@ def _source_image_url(page_meta, page_url: str) -> str:
         value = meta.get(key)
         if isinstance(value, str) and value.strip():
             value = value.strip()
-            if not _is_google_goto_url(value):
+            if (
+                not _is_google_goto_url(value)
+                and not _is_proxy_image_url(value)
+            ):
                 return value
     return ""
 
@@ -1272,6 +1290,40 @@ def run_single(args, cfg) -> int:
                 f"    Source image: {source_image_url}"
             )
 
+            # If Lens supplied the winning proxy image, independently test the
+            # source-page image before accepting the proxy URL as the result.
+            if (
+                best_source == "lens_image"
+                and source_image_url != candidate.image_url
+            ):
+                try:
+                    source_data = download_image(
+                        source_image_url,
+                        cfg.max_image_bytes,
+                        cfg.http_timeout,
+                    )
+                    source_faces = detector.detect_bytes(source_data)
+                    if source_faces:
+                        source_sim = best_similarity(
+                            reference,
+                            [face.embedding for face in source_faces],
+                        )
+                        print(
+                            f"    Source image -> {source_sim:.4f} "
+                            f"({len(source_faces)} face(s))"
+                        )
+                        if source_sim >= cfg.match_threshold:
+                            best_sim = source_sim
+                            best_data = source_data
+                            best_faces = len(source_faces)
+                            best_url = source_image_url
+                            best_source = "source_page"
+                    else:
+                        print("    Source image -> no face detected")
+                except (FetchError, FaceError) as exc:
+                    errors.append(f"source image: {exc}")
+                    print(f"    Source image -> unavailable ({exc})")
+
         if best_sim < 0:
 
             error_text = (
@@ -1657,21 +1709,23 @@ def run_single(args, cfg) -> int:
             "verified_image_source"
         ] = verified_image_source
 
+    # Print complete values. Long URLs are wrapped across terminal lines
+    # instead of being truncated with an ellipsis.
     for key, value in record.items():
 
-        text = str(value)
+        text = "" if value is None else str(value)
 
-        if len(text) > 80:
-
-            text = (
-                text[:80]
-                + "..."
-            )
-
-        kv(
-            key,
+        wrapped = textwrap.wrap(
             text,
-        )
+            width=100,
+            break_long_words=False,
+            break_on_hyphens=False,
+        ) or [""]
+
+        kv(key, wrapped[0])
+
+        for continuation in wrapped[1:]:
+            print(f"{'':<24}{continuation}")
 
     debug[
         "post_record"

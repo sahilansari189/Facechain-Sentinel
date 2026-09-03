@@ -235,6 +235,27 @@ Expected result:
 BLOCKCHAIN EVIDENCE VERIFIED
 ```
 
+### Platform image URL fallback
+
+The original image link may not always be retrievable from platforms such as **X, LinkedIn, and Instagram** because of privacy settings, authentication requirements, anti-bot protection, and restricted media access. In these cases, the system may receive only a proxy or cached image URL from the reverse-search provider instead of the original platform CDN link.
+
+This does not mean verification failed. The system can still:
+
+- Verify the downloaded image.
+- Calculate and store its image hash.
+- Preserve the original source post or profile URL.
+- Anchor the evidence hash on the blockchain.
+- Re-verify the locally stored evidence later.
+
+For transparency, result metadata distinguishes between these URLs and the image source:
+
+```text
+source_url: Original X/LinkedIn/Instagram post or profile
+verified_image_url: Image actually used for face verification
+original_image_url: Unavailable due to platform restrictions
+image_source: Reverse-search provider fallback
+```
+
 ## Blockchain Used
 
 The project uses the **Ethereum Sepolia testnet**:

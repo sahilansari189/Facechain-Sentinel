@@ -608,6 +608,13 @@ def _first_meta(
 # ============================================================
 
 
+def _is_search_provider_image(url: str) -> bool:
+    text = (url or "").lower()
+    return any(host in text for host in (
+        "serpapi.com", "google.com/search", "lens.google.com",
+        "gstatic.com/images"
+    ))
+
 def fetch_page_metadata(
     url: str,
     timeout: int = DEFAULT_TIMEOUT,
@@ -755,6 +762,40 @@ def fetch_page_metadata(
                 og_image,
             )
 
+    # JSON-LD image fallback (used by many public Instagram/X pages).
+    # Never treat a search-provider URL as an original source image.
+    def _jsonld_images(value):
+        found = []
+        if isinstance(value, dict):
+            for key in ("image", "contentUrl", "thumbnailUrl"):
+                item = value.get(key)
+                if isinstance(item, str):
+                    found.append(item)
+                elif isinstance(item, dict):
+                    found.extend(_jsonld_images(item))
+                elif isinstance(item, list):
+                    found.extend(_jsonld_images(item))
+            for item in value.get("@graph", []) if isinstance(value.get("@graph"), list) else []:
+                found.extend(_jsonld_images(item))
+        elif isinstance(value, list):
+            for item in value:
+                found.extend(_jsonld_images(item))
+        return found
+
+    if not og_image:
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                payload = json.loads(script.string or script.get_text())
+                for candidate_image in _jsonld_images(payload):
+                    candidate_image = normalize_url(final_url, candidate_image)
+                    if candidate_image and not _is_search_provider_image(candidate_image):
+                        og_image = candidate_image
+                        break
+            except Exception:
+                continue
+            if og_image:
+                break
+
     # ------------------------------------------------------------
     # Site name.
     # ------------------------------------------------------------
@@ -823,6 +864,7 @@ def fetch_page_metadata(
         "title": title,
         "description": description,
         "og_image": og_image,
+        "image_source": "source_page" if og_image else "",
         "site_name": site_name,
         "published_time": published_time,
         "author": author,

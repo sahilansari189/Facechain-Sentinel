@@ -1,0 +1,34 @@
+{
+  "record": {
+    "source_url": "https://in.linkedin.com/in/akshit-mokani",
+    "platform": "LinkedIn",
+    "title": "Akshit Mokani - Blockchain Ecosystem Builder - LinkedIn",
+    "description": "",
+    "image_url": "https://serpapi.com/searches/6a98e75eaf5fdc1cedf5cab3/images/Z_hx-dpxXUU8TtzPP86WYyO56ajuM8aLm-Qzs6oumUA.jpeg",
+    "site_name": "",
+    "published_time": "",
+    "author": "",
+    "canonical_url": "https://in.linkedin.com/in/akshit-mokani",
+    "retrieved_at": "2026-09-03T03:20:19+00:00",
+    "is_exact_match": true,
+    "search_type": "exact_matches",
+    "similarity": 0.676712,
+    "match_threshold": 0.45,
+    "search_provider": "serpapi",
+    "verified_image_url": "https://serpapi.com/searches/6a98e75eaf5fdc1cedf5cab3/images/Z_hx-dpxXUU8TtzPP86WYyO56ajuM8aLm-Qzs6oumUA.jpeg",
+    "verified_image_source": "lens_image"
+  },
+  "fingerprints": {
+    "metadata_sha256": "73ed4ea1f7d592aaa7ba925b575ef039246a63efd1e61bcb1a898fe6edb12ea1",
+    "image_sha256": "efe585c54f427a167ac113f2cc0866752375f8dd99c4c2f2884ac61766ff114b"
+  },
+  "blockchain": {
+    "network": "Ethereum Sepolia",
+    "chain_id": 11155111,
+    "contract_address": "",
+    "record_id": 22,
+    "transaction": "0xbe916e83df386b62437eb57feb7ff2f85c461d1a2e3d901e65536b1cfdf94114",
+    "block": 11623916,
+    "explorer": "https://sepolia.etherscan.io/tx/0xbe916e83df386b62437eb57feb7ff2f85c461d1a2e3d901e65536b1cfdf94114"
+  }
+}

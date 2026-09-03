@@ -1042,7 +1042,7 @@ def reverify_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     def status_after(label: str) -> bool:
         pattern = rf"^\s*{re.escape(label)}\s+(✓ MATCH|✗ MISMATCH)\s*$"
         match = re.search(pattern, output, re.IGNORECASE | re.MULTILINE)
-        return bool(match and match.group(1).strip().upper().endswith("MATCH"))
+        return bool(match and match.group(1).strip().upper() == "✓ MATCH")
 
     metadata_hash_match = status_after("Metadata hash")
     image_hash_match = status_after("Image hash")

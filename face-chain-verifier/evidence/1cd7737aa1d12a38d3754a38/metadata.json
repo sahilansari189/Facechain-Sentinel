@@ -1,0 +1,34 @@
+{
+  "record": {
+    "source_url": "https://www.type1strong.org/blog-post/9-things-not-to-say-to-someone-with-type-1-diabetes",
+    "platform": "type1strong.org",
+    "title": "9 Things Not to Say to Someone with Type 1 Diabetes",
+    "description": "The number of horrible stories that rolled off people’s tongues was almost comical at times. And unfortunately, like how you can’t unsee scenes from a horror film, you can’t un-hear what you hear—no matter how false your rational mind tells you it is.",
+    "image_url": "https://cdn.prod.website-files.com/64eec5ed1ea74a7194cd16a3/64f9a72dce29b62dc6e2fc11_Hero%20image_%20warm%20welcoming%20photo%20with%20group%20of%20happy%20people.jpg",
+    "site_name": "",
+    "published_time": "",
+    "author": "",
+    "canonical_url": "https://www.type1strong.org/blog-post/9-things-not-to-say-to-someone-with-type-1-diabetes",
+    "retrieved_at": "2026-09-03T05:01:37+00:00",
+    "is_exact_match": true,
+    "search_type": "exact_matches",
+    "similarity": 0.977087,
+    "match_threshold": 0.45,
+    "search_provider": "serpapi",
+    "verified_image_url": "https://cdn.prod.website-files.com/64eec5ed1ea74a7194cd16a3/64f9a72dce29b62dc6e2fc11_Hero%20image_%20warm%20welcoming%20photo%20with%20group%20of%20happy%20people.jpg",
+    "verified_image_source": "og_image"
+  },
+  "fingerprints": {
+    "metadata_sha256": "3a2c0b5ba0b94e44f510cd38698a27af1edfe69659fa3dc6c9e002ec3b8be32d",
+    "image_sha256": "6f9743159310539ba9ad93d82cff286413fd5a89d5b733984d3f4a83e3740667"
+  },
+  "blockchain": {
+    "network": "Ethereum Sepolia",
+    "chain_id": 11155111,
+    "contract_address": "",
+    "record_id": 26,
+    "transaction": "0x656e05be0f9d3172208bcce4d2f47d594b7c57cb903235f7455541d3d34576b5",
+    "block": 11624408,
+    "explorer": "https://sepolia.etherscan.io/tx/0x656e05be0f9d3172208bcce4d2f47d594b7c57cb903235f7455541d3d34576b5"
+  }
+}

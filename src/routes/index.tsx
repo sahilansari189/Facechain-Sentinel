@@ -12,6 +12,7 @@ import {
   X,
   Database,
   ScanFace,
+  RefreshCw,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -73,6 +74,7 @@ type VerifyResult = {
     search_provider?: string;
     verified_image_url?: string;
     verified_image_source?: string;
+    image_source?: string;
   };
 
   fingerprints?: {
@@ -174,11 +176,21 @@ function Index() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [isReverifying, setIsReverifying] = useState(false);
   const [reverifyResult, setReverifyResult] = useState<{
-    verified?: boolean;
-    metadata_hash_match?: boolean;
-    image_hash_match?: boolean;
-    source_url_match?: boolean;
+    verified: boolean;
+    metadata_hash_match: boolean;
+    image_hash_match: boolean;
+    source_url_match: boolean;
+    status?: string;
+    evidence_id?: string;
+    record_id?: number | string;
+    source_url?: string;
+    stored_metadata_hash?: string;
+    recomputed_metadata_hash?: string;
+    stored_image_hash?: string;
+    recomputed_image_hash?: string;
+    message?: string;
   } | null>(null);
+  const [reverifyError, setReverifyError] = useState<string | null>(null);
 
   const result = response?.result;
 
@@ -202,7 +214,6 @@ function Index() {
     setError(null);
     setResponse(null);
     setJobId(null);
-    setReverifyResult(null);
 
     if (!file) {
       setSelectedFile(null);
@@ -263,7 +274,6 @@ function Index() {
     setResponse(null);
     setError(null);
     setJobId(null);
-    setReverifyResult(null);
     setIsVerifying(false);
 
     if (pollTimerRef.current !== null) {
@@ -381,6 +391,42 @@ function Index() {
     await poll();
   };
 
+  const reverifyEvidence = async () => {
+    const evidenceId = result?.blockchain?.evidence_id;
+
+    if (!evidenceId) {
+      setReverifyError("No evidence ID was returned by the API.");
+      return;
+    }
+
+    setIsReverifying(true);
+    setReverifyError(null);
+    setReverifyResult(null);
+
+    try {
+      const apiResponse = await fetch(`${API_BASE}/api/reverify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ evidence_id: evidenceId }),
+      });
+
+      const data = await apiResponse.json();
+
+      if (!apiResponse.ok) {
+        throw new Error(data.detail || data.error || "Re-verification failed.");
+      }
+
+      setReverifyResult(data);
+    } catch (err) {
+      setReverifyError(err instanceof Error ? err.message : "Unable to re-verify evidence.");
+    } finally {
+      setIsReverifying(false);
+    }
+  };
+
   const startVerification = async () => {
     if (!selectedFile) {
       setError("Please select an image first.");
@@ -393,7 +439,6 @@ function Index() {
     setError(null);
     setResponse(null);
     setJobId(null);
-    setReverifyResult(null);
 
     if (pollTimerRef.current !== null) {
       window.clearTimeout(pollTimerRef.current);
@@ -495,48 +540,6 @@ function Index() {
             : "An unexpected verification error occurred.",
         );
       }
-    }
-  };
-
-  const reverifyEvidence = async () => {
-    const evidenceId = result?.blockchain?.evidence_id;
-    if (!evidenceId || isReverifying) return;
-
-    setIsReverifying(true);
-    setError(null);
-    setReverifyResult(null);
-
-    try {
-      const apiResponse = await fetch(`${API_BASE}/api/reverify`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ evidence_id: evidenceId }),
-      });
-
-      const data = await apiResponse.json();
-
-      if (!apiResponse.ok) {
-        throw new Error(
-          data.detail || data.error || "Evidence re-verification failed.",
-        );
-      }
-
-      setReverifyResult(data);
-
-      if (!data.verified) {
-        setError("Evidence has changed since it was anchored on-chain.");
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to re-verify blockchain evidence.",
-      );
-    } finally {
-      setIsReverifying(false);
     }
   };
 
@@ -1003,6 +1006,38 @@ function Index() {
                       </p>
 
                       <div className="rounded-2xl border border-slate-200 p-4">
+                        {(result.match.verified_image_url ||
+                          result.record?.verified_image_url ||
+                          result.record?.image_url) && (
+                          <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                            <img
+                              src={
+                                result.match.verified_image_url ||
+                                result.record?.verified_image_url ||
+                                result.record?.image_url
+                              }
+                              alt="Verified matching source image"
+                              className="max-h-72 w-full object-contain"
+                            />
+                          </div>
+                        )}
+
+                        {(result.match.image_source ||
+                          result.record?.verified_image_source) ===
+                          "lens_image" && (
+                          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                            <p className="font-semibold">
+                              Original platform image unavailable
+                            </p>
+                            <p className="mt-1">
+                              The platform blocked public metadata access.
+                              The displayed image is the image returned by
+                              Google Lens through SerpApi, not a direct
+                              platform CDN URL.
+                            </p>
+                          </div>
+                        )}
+
                         <div className="flex items-start justify-between gap-4">
                           <div>
                             <p className="font-semibold">
@@ -1224,7 +1259,7 @@ function Index() {
                                 ? "The verification record was independently verified."
                                 : result.blockchain.anchored
                                   ? "A blockchain transaction was created for this record."
-                                  : "No blockchain evidence is available for this result."}
+                                  : "API integration currently runs with --no-chain."}
                             </p>
                           </div>
                         </div>
@@ -1272,58 +1307,83 @@ function Index() {
 
                         {result.blockchain.evidence_id && (
                           <div className="mt-4 border-t border-slate-200 pt-4">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Evidence bundle</p>
-                                <p className="mt-1 font-mono text-xs text-slate-600">{result.blockchain.evidence_id}</p>
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={reverifyEvidence}
-                                disabled={isReverifying}
-                                className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                              >
-                                {isReverifying ? (
-                                  <>
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    Re-verifying…
-                                  </>
-                                ) : (
-                                  <>
-                                    <Fingerprint className="h-3.5 w-3.5" />
-                                    Re-verify evidence
-                                  </>
-                                )}
-                              </button>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void reverifyEvidence()}
+                              disabled={isReverifying}
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <RefreshCw className={`h-3.5 w-3.5 ${isReverifying ? "animate-spin" : ""}`} />
+                              {isReverifying ? "Re-verifying evidence…" : "Re-verify blockchain evidence"}
+                            </button>
 
                             {reverifyResult && (
-                              <div className={`mt-4 rounded-xl border p-4 ${reverifyResult.verified ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}>
-                                <div className="flex items-center gap-2">
-                                  {reverifyResult.verified ? (
-                                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                                  ) : (
-                                    <AlertCircle className="h-5 w-5 text-red-600" />
-                                  )}
-                                  <p className="text-sm font-semibold">
-                                    {reverifyResult.verified ? "Blockchain evidence verified" : "Evidence verification failed"}
-                                  </p>
-                                </div>
-
-                                <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                                  {[
-                                    ["Metadata hash", reverifyResult.metadata_hash_match],
-                                    ["Image hash", reverifyResult.image_hash_match],
-                                    ["Source URL", reverifyResult.source_url_match],
-                                  ].map(([label, matched]) => (
-                                    <div key={String(label)} className="rounded-lg bg-white/70 px-3 py-2">
-                                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
-                                      <p className="mt-1 text-xs font-semibold">{matched ? "✓ MATCH" : "✗ MISMATCH"}</p>
-                                    </div>
-                                  ))}
-                                </div>
+                              <div className={`mt-3 rounded-xl p-3 text-xs ${reverifyResult.verified ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-800"}`}>
+                                <p className="font-semibold">
+                                  {reverifyResult.verified ? "Evidence re-verified successfully" : "Evidence verification failed"}
+                                </p>
+                                <p className="mt-1">
+                                  Metadata: {reverifyResult.metadata_hash_match ? "MATCH" : "MISMATCH"} · Image: {reverifyResult.image_hash_match ? "MATCH" : "MISMATCH"} · Source URL: {reverifyResult.source_url_match ? "MATCH" : "MISMATCH"}
+                                </p>
                               </div>
+                            )}
+
+                            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                                Evidence bundle details
+                              </p>
+                              <div className="mt-3 space-y-2 text-xs text-slate-600">
+                                <div className="flex items-start justify-between gap-4">
+                                  <span>Evidence ID</span>
+                                  <span className="break-all text-right font-mono text-slate-800">
+                                    {result.blockchain.evidence_id}
+                                  </span>
+                                </div>
+                                {reverifyResult?.record_id !== undefined && (
+                                  <div className="flex items-start justify-between gap-4">
+                                    <span>On-chain record ID</span>
+                                    <span className="font-semibold text-slate-800">{reverifyResult.record_id}</span>
+                                  </div>
+                                )}
+                                {reverifyResult?.source_url && (
+                                  <div className="flex items-start justify-between gap-4">
+                                    <span>Source URL</span>
+                                    <a href={reverifyResult.source_url} target="_blank" rel="noreferrer" className="max-w-[70%] break-all text-right text-blue-700 underline">
+                                      {reverifyResult.source_url}
+                                    </a>
+                                  </div>
+                                )}
+                                {reverifyResult?.stored_metadata_hash && (
+                                  <div>
+                                    <p className="mb-1">Stored metadata hash</p>
+                                    <p className="break-all font-mono text-[11px] text-slate-800">{reverifyResult.stored_metadata_hash}</p>
+                                  </div>
+                                )}
+                                {reverifyResult?.recomputed_metadata_hash && (
+                                  <div>
+                                    <p className="mb-1">Recomputed metadata hash</p>
+                                    <p className="break-all font-mono text-[11px] text-slate-800">{reverifyResult.recomputed_metadata_hash}</p>
+                                  </div>
+                                )}
+                                {reverifyResult?.stored_image_hash && (
+                                  <div>
+                                    <p className="mb-1">Stored image hash</p>
+                                    <p className="break-all font-mono text-[11px] text-slate-800">{reverifyResult.stored_image_hash}</p>
+                                  </div>
+                                )}
+                                {reverifyResult?.recomputed_image_hash && (
+                                  <div>
+                                    <p className="mb-1">Recomputed image hash</p>
+                                    <p className="break-all font-mono text-[11px] text-slate-800">{reverifyResult.recomputed_image_hash}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {reverifyError && (
+                              <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs text-red-700">
+                                {reverifyError}
+                              </p>
                             )}
                           </div>
                         )}

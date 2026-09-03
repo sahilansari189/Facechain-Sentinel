@@ -1,0 +1,26 @@
+{
+  "record": {
+    "source_url": "https://in.linkedin.com/in/akshit-mokani",
+    "platform": "LinkedIn",
+    "title": "Akshit Mokani - Blockchain Ecosystem Builder - LinkedIn",
+    "description": "",
+    "image_url": "https://serpapi.com/searches/6a98e61786e9fa160f9bbad2/images/LKuM2Cght_S6B26RQJGHiJDBb96qxb6Hx2SQ8WaZrJs.jpeg",
+    "site_name": "",
+    "published_time": "",
+    "author": "",
+    "canonical_url": "https://in.linkedin.com/in/akshit-mokani",
+    "retrieved_at": "2026-09-03T03:14:51+00:00",
+    "is_exact_match": true,
+    "search_type": "exact_matches",
+    "similarity": 0.676712,
+    "match_threshold": 0.45,
+    "search_provider": "serpapi",
+    "verified_image_url": "https://serpapi.com/searches/6a98e61786e9fa160f9bbad2/images/LKuM2Cght_S6B26RQJGHiJDBb96qxb6Hx2SQ8WaZrJs.jpeg",
+    "verified_image_source": "lens_image"
+  },
+  "fingerprints": {
+    "metadata_sha256": "8fa2344eceafbb9288710950d4b5a30d59c6df4f643b71b015334a83cce44ea3",
+    "image_sha256": "efe585c54f427a167ac113f2cc0866752375f8dd99c4c2f2884ac61766ff114b"
+  },
+  "blockchain": null
+}
