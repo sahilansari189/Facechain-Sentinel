@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: facechain-sentinel-api
+    runtime: python
+    rootDir: face-chain-verifier
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SEARCH_PROVIDER
+        value: serpapi
+      - key: SEARCH_API_KEY
+        sync: false
+      - key: IMAGE_UPLOAD_URL
+        value: https://0x0.st
+      - key: RPC_URL
+        sync: false
+      - key: PRIVATE_KEY
+        sync: false
+      - key: CONTRACT_ADDRESS
+        sync: false

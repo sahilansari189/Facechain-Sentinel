@@ -63,6 +63,24 @@ npm install
 
 The UI defaults to `http://localhost:8000` for the API. Set `VITE_API_URL` before starting Vite if the API is hosted elsewhere.
 
+### Deploy to Render and Vercel
+
+The repository includes [`render.yaml`](render.yaml) for the FastAPI backend. In Render,
+create a Blueprint from the repository, then fill in the secret environment variables shown
+as `sync: false`. Set `CORS_ORIGINS` to the exact Vercel origin, for example
+`https://your-app.vercel.app`. Add any Vercel preview origins as a comma-separated list.
+
+For Vercel, import the repository with the project root left at the repository root. Use the
+default Node build settings (`npm run build`); the Vite config pins the TanStack Start Nitro
+preset to Vercel. Set the Vercel environment variable `VITE_API_URL` to the deployed Render
+service URL, for example `https://facechain-sentinel-api.onrender.com`, then redeploy so the
+value is included in the frontend build.
+
+Test `https://your-render-service.onrender.com/api/health` before testing an upload from
+Vercel. Render's local filesystem and this API's in-memory job queue are instance-local, so
+use a persistent job store and object storage before scaling to multiple instances or
+requiring evidence to survive restarts.
+
 ## Run It
 
 Start the FastAPI service in one terminal:

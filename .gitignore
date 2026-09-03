@@ -104,6 +104,9 @@ build/
 # Vite
 .vite/
 
+# Vercel deployment output
+.vercel/
+
 # Next / Nuxt if used later
 .next/
 .nuxt/
