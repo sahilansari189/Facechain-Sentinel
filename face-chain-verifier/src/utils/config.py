@@ -52,7 +52,7 @@ class Config:
     image_upload_url: str = field(default_factory=lambda: _get("IMAGE_UPLOAD_URL", "https://0x0.st"))
 
     # face
-    face_model: str = field(default_factory=lambda: _get("FACE_MODEL", "buffalo_l"))
+    face_model: str = field(default_factory=lambda: _get("FACE_MODEL", "buffalo_s"))
     face_det_size: int = field(default_factory=lambda: _get_int("FACE_DET_SIZE", 640))
     match_threshold: float = field(default_factory=lambda: _get_float("MATCH_THRESHOLD", 0.45))
     max_candidates: int = field(default_factory=lambda: _get_int("MAX_CANDIDATES", 20))

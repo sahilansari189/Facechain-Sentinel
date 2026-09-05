@@ -15,6 +15,10 @@ services:
         sync: false
       - key: IMAGE_UPLOAD_URL
         value: https://0x0.st
+      - key: FACE_MODEL
+        value: buffalo_s
+      - key: FACE_POOL_SIZE
+        value: "1"
       - key: RPC_URL
         sync: false
       - key: PRIVATE_KEY

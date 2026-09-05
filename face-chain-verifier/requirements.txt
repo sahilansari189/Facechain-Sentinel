@@ -12,7 +12,7 @@ Pillow>=10.4.0
 # 1.0.1 ships an official pure-Python wheel; FaceAnalysis remains compatible.
 insightface==1.0.1
 onnxruntime>=1.19.2
-opencv-python>=4.10.0.84
+opencv-python-headless>=4.10.0.84
 
 # --- html / metadata extraction ---
 beautifulsoup4==4.12.3
