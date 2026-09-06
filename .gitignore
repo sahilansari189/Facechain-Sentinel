@@ -19,6 +19,9 @@ secrets.json
 # ============================================================
 # PYTHON BACKEND
 # ============================================================
+.venv/
+venv/
+
 face-chain-verifier/.venv/
 face-chain-verifier/venv/
 face-chain-verifier/env/
@@ -94,6 +97,7 @@ face-chain-verifier/uploads/
 # ============================================================
 # FRONTEND / NODE
 # ============================================================
+.vercel/
 node_modules/
 
 npm-debug.log*
