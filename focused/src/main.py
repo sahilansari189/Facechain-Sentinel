@@ -9,7 +9,7 @@ Single-image flow:
     input image
         -> InsightFace detection
         -> ArcFace reference embedding
-        -> Cloudinary/public image URL
+        -> public image URL (or direct SerpApi upload)
         -> live reverse image search
         -> candidate pages/images
         -> candidate image verification
@@ -33,6 +33,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
+
+# Configure utf-8 stdout/stderr for Windows console
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    except Exception:
+        pass
 
 sys.path.insert(
     0,
@@ -422,7 +430,7 @@ def _save_debug(debug: dict) -> None:
 def _search_local_with_serpapi(provider, image_path, limit):
     """Use SerpApi's direct image upload when supported.
 
-    This avoids the extra Cloudinary/public-URL upload used by the
+    This avoids the extra public-URL upload used by the
     legacy path. Falls back to the normal URL-based search if the
     provider does not expose the direct local-file API.
     """
@@ -976,7 +984,7 @@ def run_single(args, cfg) -> int:
         )
 
         # SerpApi can accept the local image directly. This removes
-        # the extra Cloudinary/public-URL upload from the hot path.
+        # the extra public-URL upload from the hot path.
         candidates = None
 
         if (
@@ -994,36 +1002,45 @@ def run_single(args, cfg) -> int:
                         "Search upload",
                         "SerpApi direct local upload",
                     )
-            except SearchError:
-                # Preserve the existing public-URL fallback.
+            except SearchError as exc:
+                warn(f"SerpApi direct local upload failed ({exc}); trying URL upload / fallback...")
                 candidates = None
 
         if candidates is None:
             if not image_url:
-                step(
-                    "Publishing input image temporarily "
-                    f"via {cfg.image_upload_url} ..."
-                )
+                try:
+                    step(
+                        "Publishing input image temporarily "
+                        f"via {cfg.image_upload_url} ..."
+                    )
+                    image_url = upload_image_for_search(
+                        args.image,
+                        cfg.image_upload_url,
+                        cfg.http_timeout,
+                    )
+                except Exception as exc:
+                    warn(
+                        f"Temporary image upload failed ({exc}); "
+                        "trying free Headless Lens + Yandex fallback..."
+                    )
+                    image_url = ""
 
-                image_url = upload_image_for_search(
-                    args.image,
-                    cfg.image_upload_url,
-                    cfg.http_timeout,
-                )
-
-            kv(
-                "Query image URL",
-                image_url,
-            )
-
-            try:
-                candidates = provider.search(
+            if image_url:
+                kv(
+                    "Query image URL",
                     image_url,
-                    limit=cfg.max_candidates,
                 )
-            except SearchError:
-                if provider.name != "serpapi":
-                    raise
+                try:
+                    candidates = provider.search(
+                        image_url,
+                        limit=cfg.max_candidates,
+                    )
+                except SearchError:
+                    if provider.name != "serpapi":
+                        raise
+                    candidates = None
+
+            if not candidates:
                 warn(
                     "SerpApi returned no usable results; "
                     "trying free Headless Lens + Yandex fallback..."
@@ -1046,6 +1063,42 @@ def run_single(args, cfg) -> int:
                 face_bbox=primary.bbox,
                 image=image,
             )
+
+        # A supplied public handle is an explicit, analyst-directed pivot.
+        # Merge its harvested public profile media with visual-search results;
+        # never replace the existing reverse-search workflow.
+        if args.handle and cfg.pivot_enabled:
+            try:
+                from src.search.free_search import UsernameSweepProvider
+
+                pivot_result = UsernameSweepProvider(
+                    handles=[args.handle],
+                    timeout=cfg.pivot_timeout,
+                    max_candidates=cfg.pivot_max_candidates,
+                ).search()
+                pivot_candidates = [
+                    Candidate(
+                        url=item.source_url,
+                        title=item.title,
+                        source=item.domain,
+                        image_url=item.image_url,
+                        search_type="username_pivot",
+                    )
+                    for item in pivot_result.candidates
+                ]
+                known = {(item.url, item.image_url) for item in (candidates or [])}
+                candidates = (candidates or []) + [
+                    item for item in pivot_candidates
+                    if (item.url, item.image_url) not in known
+                ]
+                debug["identity_pivot"]["accounts_found"] = (
+                    pivot_result.raw_response or {}
+                ).get("hits_count", 0)
+                debug["identity_pivot"]["candidates_found"] = len(pivot_candidates)
+            except Exception as exc:
+                # A pivot is an optional public-data extension; retain normal
+                # reverse-search behavior when a remote site is unavailable.
+                warn(f"Identity pivot unavailable: {exc}")
 
         if not candidates:
 
@@ -1112,6 +1165,10 @@ def run_single(args, cfg) -> int:
         candidates,
         1,
     ):
+
+        cand_text = f"{candidate.url} {candidate.source} {candidate.title} {candidate.image_url}".lower()
+        if "tiktok" in cand_text:
+            continue
 
         label = (
             f"Candidate {i:>2} "
@@ -1216,6 +1273,26 @@ def run_single(args, cfg) -> int:
                         best_source = (
                             "lens_image"
                         )
+
+                    # If Lens image -> 1.0000 (1 face(s)), give result immediately
+                    if round(sim, 4) >= 1.0000 and len(candidate_faces) == 1:
+                        print(
+                            f"    RESULT -> "
+                            f"{best_sim:.4f} "
+                            f"via {best_source}  ← MATCH (exact)"
+                        )
+                        item = ScoredCandidate(
+                            candidate,
+                            best_sim,
+                            faces_found=best_faces,
+                            image_bytes=best_data,
+                        )
+                        item.matched_image_url = best_url
+                        item.matched_image_source = best_source
+                        item.page_metadata = {}
+                        scored.append(item)
+                        print("\n  [+] Exact 1.0000 match found on Lens image (1 face). Returning result immediately.")
+                        break
 
             except (
                 FetchError,
@@ -1359,10 +1436,10 @@ def run_single(args, cfg) -> int:
                             )
 
                             # Prefer a verified image fetched from the source page
-                            # over SerpApi's temporary Lens proxy.  It is acceptable
+                            # over SerpApi's temporary Lens proxy. It is acceptable
                             # for its score to be lower than the proxy as long as it
                             # independently clears the configured match threshold.
-                            if og_sim >= cfg.match_threshold:
+                            if og_sim > best_sim or (best_sim < cfg.match_threshold and og_sim >= cfg.match_threshold):
 
                                 best_sim = og_sim
                                 best_data = og_data
@@ -1431,7 +1508,7 @@ def run_single(args, cfg) -> int:
                             f"    Source image -> {source_sim:.4f} "
                             f"({len(source_faces)} face(s))"
                         )
-                        if source_sim >= cfg.match_threshold:
+                        if source_sim > best_sim or (best_sim < cfg.match_threshold and source_sim >= cfg.match_threshold):
                             best_sim = source_sim
                             best_data = source_data
                             best_faces = len(source_faces)
@@ -2111,7 +2188,6 @@ def run_batch(args, cfg) -> int:
         paths = discover_images(
             args.batch,
             recursive=not args.no_recursive,
-            
         )
         if args.limit and args.limit > 0:
             paths = paths[:args.limit]

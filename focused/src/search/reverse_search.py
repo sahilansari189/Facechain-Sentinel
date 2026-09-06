@@ -12,15 +12,13 @@ Providers implemented:
 Image upload:
 
     serpapi  - Direct upload through SerpApi Image API
-    cloudinary - Upload local image and return HTTPS URL
     generic HTTP uploader - Legacy fallback
 
 Important:
 
 * SerpApi Google Lens is queried with exact_matches first.
 * visual_matches are queried separately as a broader fallback.
-* SerpApi's Image API can accept the local file directly, avoiding
-  Cloudinary for the actual Lens query.
+* SerpApi's Image API accepts the local file directly.
 * Exact-match candidates are marked with is_exact_match=True.
 * Candidate image URLs prefer the full-size "image" field over
   thumbnails.
@@ -224,6 +222,11 @@ def dedupe(
 
     best: List[Candidate] = []
     for c in candidates:
+        # Exclude TikTok completely
+        c_text = f"{c.url} {c.source} {c.title} {c.image_url}".lower()
+        if "tiktok" in c_text:
+            continue
+
         page = clean(c.url)
         image = clean(c.image_url)
         if not page and not image:
@@ -245,6 +248,43 @@ def dedupe(
             best[duplicate] = c
 
     return best
+
+
+def _is_crawler_stub(url: str) -> bool:
+    """Return True if image URL is known to be an unauthenticated crawler/widget HTML stub."""
+    if not url:
+        return True
+    u = url.lower()
+    return (
+        "google_widget/crawler" in u
+        or "crawler/media" in u
+        or "lookaside.instagram.com" in u
+        or "lookaside.fbsbx.com" in u
+        or "tiktok.com" in u
+    )
+
+
+def _social_priority(c: Candidate) -> int:
+    social = (
+        "linkedin.com", "instagram.com", "facebook.com", "twitter.com",
+        "x.com", "threads.net", "youtube.com", "github.com", "findinfluencer.in",
+        "pinterest.com", "medium.com", "quora.com",
+    )
+    u = (c.url or "").lower()
+    s = (c.source or "").lower()
+    for idx, domain in enumerate(social):
+        if domain in u or domain in s:
+            return idx
+    return 999
+
+
+def _candidate_rank_key(candidate: Candidate) -> tuple:
+    """Sort exact matches first, working images before crawler stubs, then social priority and position."""
+    exact_score = 0 if candidate.is_exact_match else 1
+    stub_score = 1 if _is_crawler_stub(candidate.image_url) else 0
+    social_score = _social_priority(candidate)
+    pos = candidate.position if candidate.position > 0 else 999999
+    return (exact_score, stub_score, social_score, pos)
 
 
 class ReverseImageSearchProvider:
@@ -324,6 +364,40 @@ class ReverseImageSearchProvider:
             )
 
         return resp
+
+
+def _prepare_serpapi_image_data(path: str) -> bytes:
+    """Ensure image is a baseline JPEG under 500KB as required by SerpApi Image API."""
+    import os
+    from io import BytesIO
+    from PIL import Image
+
+    file_size = os.path.getsize(path)
+    if file_size <= 500_000:
+        try:
+            with Image.open(path) as im:
+                if im.format == "JPEG" and im.mode == "RGB":
+                    with open(path, "rb") as fh:
+                        return fh.read()
+        except Exception:
+            pass
+
+    with Image.open(path) as im:
+        rgb = im.convert("RGB")
+        quality = 90
+        while quality >= 30:
+            buf = BytesIO()
+            rgb.save(buf, format="JPEG", quality=quality)
+            out_bytes = buf.getvalue()
+            if len(out_bytes) <= 500_000:
+                return out_bytes
+            quality -= 10
+
+        w, h = rgb.size
+        rgb = rgb.resize((max(1, w // 2), max(1, h // 2)))
+        buf = BytesIO()
+        rgb.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
 
 
 # ============================================================
@@ -580,12 +654,8 @@ class SerpApiGoogleLensProvider(
             except SearchError:
                 pass
 
-        combined.sort(
-            key=lambda candidate: (
-                not candidate.is_exact_match,
-                candidate.position if candidate.position > 0 else 999999,
-            )
-        )
+
+        combined.sort(key=_candidate_rank_key)
         for candidate in combined:
             if _is_google_goto(candidate.url):
                 candidate.url = _resolve_page_url(
@@ -607,58 +677,63 @@ class SerpApiGoogleLensProvider(
         """Upload a local image directly to SerpApi.
 
         Returns an image_id.
-
-        SerpApi documents a 500 KB maximum for this endpoint,
-        so callers should resize/compress larger images first.
+        Automatically converts non-JPEGs and compresses images >500KB to meet
+        SerpApi's 500 KB limit, and retries on transient rate limits.
         """
+        import time
 
         if not self.api_key:
-
             raise SearchError(
-                "serpapi: SEARCH_API_KEY "
-                "is not set"
+                "serpapi: SEARCH_API_KEY is not set"
             )
 
         if not os.path.isfile(path):
-
             raise SearchError(
                 f"image not found: {path}"
             )
 
         try:
+            img_bytes = _prepare_serpapi_image_data(path)
+        except Exception:
+            with open(path, "rb") as fh:
+                img_bytes = fh.read()
 
-            with open(
-                path,
-                "rb",
-            ) as fh:
-
+        response = None
+        for attempt in range(3):
+            try:
                 response = requests.post(
                     self.image_endpoint,
                     files={
                         "image": (
-                            os.path.basename(path),
-                            fh,
+                            "image.jpg",
+                            img_bytes,
+                            "image/jpeg",
                         )
                     },
                     data={
                         "api_key": self.api_key,
                     },
                     headers={
-                        "User-Agent":
-                            "face-chain-verifier/1.0"
+                        "User-Agent": "face-chain-verifier/1.0"
                     },
                     timeout=self.timeout,
                 )
+                if response.status_code == 429 and attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                break
+            except requests.RequestException as exc:
+                if attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                raise SearchError(
+                    f"serpapi image upload failed: {exc}"
+                ) from exc
 
-        except requests.RequestException as exc:
-
-            raise SearchError(
-                f"serpapi image upload failed: "
-                f"{exc}"
-            ) from exc
+        if response is None:
+            raise SearchError("serpapi image upload failed: no response")
 
         if response.status_code >= 400:
-
             raise SearchError(
                 "serpapi image upload failed: "
                 f"HTTP {response.status_code}: "
@@ -666,33 +741,21 @@ class SerpApiGoogleLensProvider(
             )
 
         try:
-
             data = response.json()
-
         except ValueError as exc:
-
             raise SearchError(
-                "serpapi image upload returned "
-                "invalid JSON"
+                "serpapi image upload returned invalid JSON"
             ) from exc
 
         if data.get("error"):
-
             raise SearchError(
-                f"serpapi image upload: "
-                f"{data['error']}"
+                f"serpapi image upload: {data['error']}"
             )
 
-        image_id = (
-            data.get("image_id")
-            or ""
-        ).strip()
-
+        image_id = (data.get("image_id") or "").strip()
         if not image_id:
-
             raise SearchError(
-                "serpapi image upload succeeded "
-                "but no image_id was returned"
+                "serpapi image upload succeeded but no image_id was returned"
             )
 
         return image_id
@@ -702,12 +765,7 @@ class SerpApiGoogleLensProvider(
         path: str,
         limit: int = 20,
     ) -> List[Candidate]:
-        """Upload a local image directly to SerpApi and search it.
-
-        This avoids Cloudinary for the Lens query. If direct upload is
-        unavailable or fails, callers can fall back to their existing
-        public-URL path.
-        """
+        """Upload a local image directly to SerpApi and search it."""
         image_id = self.upload_image(path)
         return self.search_image_id(image_id, limit=limit)
 
@@ -734,10 +792,12 @@ class SerpApiGoogleLensProvider(
 
             params = {
                 "engine": "google_lens",
-                "type": search_type,
                 "image_id": image_id,
                 "api_key": self.api_key,
             }
+
+            if search_type:
+                params["type"] = search_type
 
             country = (
                 self.options.get("country")
@@ -783,25 +843,22 @@ class SerpApiGoogleLensProvider(
                     f"serpapi: {data['error']}"
                 )
 
-            rows = (
-                data.get(search_type)
-                or []
-            )
+            if search_type:
+                typed_rows = [(r, search_type) for r in (data.get(search_type) or []) if isinstance(r, dict)]
+            else:
+                typed_rows = (
+                    [(r, "exact_matches") for r in (data.get("exact_matches") or []) if isinstance(r, dict)]
+                    + [(r, "visual_matches") for r in (data.get("visual_matches") or []) if isinstance(r, dict)]
+                    + [(r, "image_sources") for r in (data.get("image_sources") or []) if isinstance(r, dict)]
+                )
 
             out: List[Candidate] = []
 
-            for row in rows:
-
-                if not isinstance(
-                    row,
-                    dict,
-                ):
-                    continue
-
+            for row, stype in typed_rows:
                 candidate = (
                     self._candidate_from_row(
                         row,
-                        search_type,
+                        stype,
                     )
                 )
 
@@ -813,22 +870,35 @@ class SerpApiGoogleLensProvider(
 
             return out
 
-        # Exact-first: avoid the visual request when exact results are
-        # already sufficient for identity verification.
-        exact = search_type_by_id("exact_matches")
-        combined = dedupe(exact)
-
+        # Comprehensive pass: Google Lens default query gives visual_matches,
+        # exact_matches, and image_sources together in a single request.
         try:
-            exact_min = max(
-                1,
-                int(self.options.get("exact_min_results", 3) or 3),
-            )
-        except (TypeError, ValueError):
-            exact_min = 3
+            combined = dedupe(search_type_by_id(""))
+        except SearchError:
+            combined = []
 
-        if len(combined) < exact_min:
-            visual = search_type_by_id("visual_matches")
-            combined = dedupe(combined + visual)
+        if not combined:
+            try:
+                exact = search_type_by_id("exact_matches")
+            except SearchError:
+                exact = []
+            combined = dedupe(exact)
+
+            try:
+                exact_min = max(
+                    1,
+                    int(self.options.get("exact_min_results", 3) or 3),
+                )
+            except (TypeError, ValueError):
+                exact_min = 3
+
+            if len(combined) < exact_min:
+                try:
+                    visual = search_type_by_id("visual_matches")
+                    combined = dedupe(combined + visual)
+                except SearchError:
+                    if not combined:
+                        raise
 
         try:
             fallback_min = max(
@@ -845,14 +915,7 @@ class SerpApiGoogleLensProvider(
             except SearchError:
                 pass
 
-        combined.sort(
-            key=lambda candidate: (
-                not candidate.is_exact_match,
-                candidate.position
-                if candidate.position > 0
-                else 999999,
-            )
-        )
+        combined.sort(key=_candidate_rank_key)
 
         for candidate in combined:
             if _is_google_goto(candidate.url):
@@ -1289,105 +1352,6 @@ def get_provider(
     )
 
 
-# ============================================================
-# Cloudinary upload
-# ============================================================
-
-
-def _upload_to_cloudinary(
-    path: str,
-    timeout: int = 30,
-) -> str:
-    """Upload an image to Cloudinary and return its HTTPS URL."""
-
-    try:
-
-        import cloudinary
-        import cloudinary.uploader
-
-    except ImportError as exc:
-
-        raise SearchError(
-            "Cloudinary SDK is not installed. "
-            "Run: pip install cloudinary"
-        ) from exc
-
-    cloud_name = os.environ.get(
-        "CLOUDINARY_CLOUD_NAME",
-        "",
-    ).strip()
-
-    api_key = os.environ.get(
-        "CLOUDINARY_API_KEY",
-        "",
-    ).strip()
-
-    api_secret = os.environ.get(
-        "CLOUDINARY_API_SECRET",
-        "",
-    ).strip()
-
-    if not cloud_name:
-
-        raise SearchError(
-            "CLOUDINARY_CLOUD_NAME "
-            "is not configured"
-        )
-
-    if not api_key:
-
-        raise SearchError(
-            "CLOUDINARY_API_KEY "
-            "is not configured"
-        )
-
-    if not api_secret:
-
-        raise SearchError(
-            "CLOUDINARY_API_SECRET "
-            "is not configured"
-        )
-
-    try:
-
-        cloudinary.config(
-            cloud_name=cloud_name,
-            api_key=api_key,
-            api_secret=api_secret,
-            secure=True,
-        )
-
-        result = (
-            cloudinary.uploader.upload(
-                path,
-                resource_type="image",
-                folder="face-chain-verifier",
-                use_filename=False,
-                unique_filename=True,
-                overwrite=False,
-                timeout=timeout,
-            )
-        )
-
-    except Exception as exc:
-
-        raise SearchError(
-            f"Cloudinary upload failed: {exc}"
-        ) from exc
-
-    secure_url = (
-        result.get("secure_url")
-        or ""
-    ).strip()
-
-    if not secure_url:
-
-        raise SearchError(
-            "Cloudinary upload succeeded "
-            "but returned no secure URL"
-        )
-
-    return secure_url
 
 
 # ============================================================
@@ -1400,68 +1364,66 @@ def _upload_generic(
     upload_url: str,
     timeout: int,
 ) -> str:
-    """Upload using the legacy generic HTTP endpoint."""
+    """Upload using HTTP endpoints with automated fallback if configured service is down."""
+    services = []
+    if upload_url and not upload_url.startswith("https://0x0.st"):
+        services.append(("configured", upload_url))
+    # Add robust public fallback uploader (0x0.st has disabled uploads with HTTP 503)
+    services.append(("uguu", "https://uguu.se/upload"))
+    if upload_url and upload_url.startswith("https://0x0.st"):
+        services.append(("0x0.st", upload_url))
 
-    if not upload_url:
-
-        raise SearchError(
-            "no IMAGE_UPLOAD_URL configured "
-            "and no --image-url provided"
-        )
-
+    errors = []
     try:
+        data = _prepare_serpapi_image_data(path)
+    except Exception:
+        with open(path, "rb") as fh:
+            data = fh.read()
 
-        with open(
-            path,
-            "rb",
-        ) as fh:
+    for name, svc_url in services:
+        try:
+            if name == "uguu":
+                resp = requests.post(
+                    svc_url,
+                    files={"files[]": ("image.jpg", data, "image/jpeg")},
+                    headers={"User-Agent": "face-chain-verifier/1.0"},
+                    timeout=timeout,
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    files = body.get("files") or []
+                    if files and isinstance(files, list):
+                        url = files[0].get("url", "").strip()
+                        if url.startswith(("http://", "https://")):
+                            return url
+                errors.append(f"uguu: HTTP {resp.status_code}")
+            else:
+                resp = requests.post(
+                    svc_url,
+                    files={
+                        "file": (
+                            os.path.basename(path),
+                            data,
+                        )
+                    },
+                    headers={
+                        "User-Agent":
+                            "face-chain-verifier/1.0 "
+                            "(contact: local demo)"
+                    },
+                    timeout=timeout,
+                )
+                if resp.status_code < 400:
+                    url = resp.text.strip()
+                    if url.startswith(("http://", "https://")):
+                        return url
+                errors.append(f"{name}: HTTP {resp.status_code}")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
 
-            resp = requests.post(
-                upload_url,
-                files={
-                    "file": (
-                        os.path.basename(path),
-                        fh,
-                    )
-                },
-                headers={
-                    "User-Agent":
-                        "face-chain-verifier/1.0 "
-                        "(contact: local demo)"
-                },
-                timeout=timeout,
-            )
-
-    except requests.RequestException as exc:
-
-        raise SearchError(
-            f"image upload failed: {exc}"
-        ) from exc
-
-    if resp.status_code >= 400:
-
-        raise SearchError(
-            f"image upload failed: "
-            f"HTTP {resp.status_code}: "
-            f"{resp.text[:300]}"
-        )
-
-    url = resp.text.strip()
-
-    if not url.startswith(
-        (
-            "http://",
-            "https://",
-        )
-    ):
-
-        raise SearchError(
-            "image upload returned an "
-            "unexpected response: "
-            f"{url[:120]}"
-        )
-
-    return url
+    raise SearchError(
+        f"image upload failed across available endpoints: {'; '.join(errors)}"
+    )
 
 
 # ============================================================
@@ -1474,36 +1436,17 @@ def upload_image_for_search(
     upload_url: str,
     timeout: int = 30,
 ) -> str:
-    """Publish a local image at a temporary public URL.
-
-    Supported values:
-
-        cloudinary
-            Upload through Cloudinary.
-
-        <HTTP URL>
-            Use the legacy generic upload endpoint.
+    """Publish a local image at a temporary public URL using generic HTTP uploader.
 
     For SerpApi Google Lens, prefer using the provider's
-    ``upload_image()`` method directly because SerpApi can
-    accept the local image without Cloudinary.
+    ``upload_image()`` method directly because SerpApi accepts
+    the local image directly.
     """
 
     if not os.path.isfile(path):
 
         raise SearchError(
             f"image not found: {path}"
-        )
-
-    if (
-        upload_url
-        and upload_url.strip().lower()
-        == "cloudinary"
-    ):
-
-        return _upload_to_cloudinary(
-            path,
-            timeout=timeout,
         )
 
     return _upload_generic(

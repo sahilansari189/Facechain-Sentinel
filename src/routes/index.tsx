@@ -21,7 +21,7 @@ export const Route = createFileRoute("/")({
 });
 
 const API_BASE =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
+  import.meta.env["VITE_API_URL"]?.replace(/\/$/, "") ||
   "http://localhost:8000";
 
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
@@ -168,6 +168,12 @@ function Index() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [context, setContext] = useState("");
+  const [handle, setHandle] = useState("");
+  const [platform, setPlatform] = useState("");
+  const [provider, setProvider] = useState("serpapi");
+  const [threshold, setThreshold] = useState("0.45");
+  const [noChain, setNoChain] = useState(false);
 
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -453,6 +459,12 @@ function Index() {
         selectedFile,
         selectedFile.name,
       );
+      formData.append("context", context.trim());
+      formData.append("handle", handle.trim());
+      formData.append("platform", platform);
+      formData.append("provider", provider);
+      formData.append("threshold", threshold);
+      formData.append("no_chain", String(noChain));
 
       /*
        * Step 1:
@@ -836,6 +848,86 @@ function Index() {
             <p className="mt-3 text-center text-xs text-slate-400">
               API endpoint: {API_BASE}/api/verify
             </p>
+
+            <div className="mt-6 border-t border-slate-200 pt-5">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold">Investigation parameters</p>
+                  <p className="mt-1 text-xs text-slate-500">Optional public-source search pivots.</p>
+                </div>
+                <ScanFace className="h-4 w-4 text-slate-400" />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-slate-600">
+                  Context clue
+                  <input
+                    value={context}
+                    onChange={(event) => setContext(event.target.value)}
+                    placeholder="e.g. web3 speaker"
+                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal outline-none ring-offset-2 focus:border-slate-600 focus:ring-2 focus:ring-slate-200"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-600">
+                  Public handle
+                  <input
+                    value={handle}
+                    onChange={(event) => setHandle(event.target.value)}
+                    placeholder="username"
+                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal outline-none ring-offset-2 focus:border-slate-600 focus:ring-2 focus:ring-slate-200"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-600">
+                  Platform scope
+                  <select
+                    value={platform}
+                    onChange={(event) => setPlatform(event.target.value)}
+                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-slate-600 focus:ring-2 focus:ring-slate-200"
+                  >
+                    <option value="">All public platforms</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="twitter">X / Twitter</option>
+                    <option value="linkedin">LinkedIn</option>
+                  </select>
+                </label>
+                <label className="text-xs font-semibold text-slate-600">
+                  Search provider
+                  <select
+                    value={provider}
+                    onChange={(event) => setProvider(event.target.value)}
+                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-slate-600 focus:ring-2 focus:ring-slate-200"
+                  >
+                    <option value="serpapi">SerpApi Google Lens</option>
+                    <option value="bing">Bing Visual Search</option>
+                    <option value="tineye">TinEye</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                  <span>Match threshold</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={threshold}
+                    onChange={(event) => setThreshold(event.target.value)}
+                    className="w-20 rounded-lg border border-slate-300 px-2 py-1.5 text-sm font-normal"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={noChain}
+                    onChange={(event) => setNoChain(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  Skip blockchain anchoring
+                </label>
+              </div>
+            </div>
           </div>
 
           {/* Results */}
@@ -1509,7 +1601,7 @@ function HashRow({
 }: {
   icon: React.ReactNode;
   label: string;
-  value?: string | null;
+  value?: string | null | undefined;
 }) {
   return (
     <div>

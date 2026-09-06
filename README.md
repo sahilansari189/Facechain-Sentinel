@@ -97,6 +97,27 @@ python src/main.py --image examples/input.webp --no-chain
 
 Useful options include `--provider serpapi|bing|tineye`, `--threshold 0.5`, `--face-index 1`, `--max-candidates 30`, and `--save-results`. Batch processing is available with `--batch PATH...`; see the [verifier README](face-chain-verifier/README.md#batch-mode-50-100-images) for checkpointing, reports, and Merkle-root anchoring.
 
+### Focused social results
+
+The newly added [`focused/`](focused/) folder contains the social-search variant of the
+pipeline. Use it when you want results focused on Instagram, LinkedIn, or X. Change into
+that folder before installing dependencies or running the focused CLI:
+
+```powershell
+cd focused
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+Run a focused search with the platform option below. The CLI uses `twitter` for X:
+
+```powershell
+python src/main.py --image examples/input.webp
+```
+
 ## Evidence Re-verification
 
 Normal API verification runs the blockchain step and creates an evidence bundle for every successful match under `evidence/<evidence-id>/`:

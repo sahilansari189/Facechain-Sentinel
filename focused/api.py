@@ -56,11 +56,14 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+        origin.strip()
+        for origin in os.environ.get(
+            "CORS_ORIGINS",
+            "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173",
+        ).split(",")
+        if origin.strip()
     ],
+    allow_origin_regex=r"https://([a-z0-9-]+\.)*vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -228,7 +231,7 @@ def update_progress_from_output(
             "VERIFIED - DATA INTEGRITY CONFIRMED",
             "Verification complete",
             100,
-        ), 
+        ),
         (
             "BLOCKCHAIN EVIDENCE VERIFIED",
             "Verification complete",

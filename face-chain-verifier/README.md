@@ -159,7 +159,9 @@ python -c "from insightface.app import FaceAnalysis; print('InsightFace ready')"
 
 | Variable | Meaning |
 |---|---|
-| `SEARCH_PROVIDER` | `serpapi` (default), `bing`, or `tineye`. |
+| `SEARCH_PROVIDER` | `serpapi` (default), `bing`, `tineye`, or `cascade`. |
+| `SEARCH_FALLBACKS` | Comma-separated public fallback providers for `cascade`, such as `headless_lens,yandex`. |
+| `SEARCH_CONTEXT` | Optional context clue used for runtime public-web query generation. |
 | `SEARCH_API_KEY` | API key for the selected provider (SerpApi or Bing). |
 | `BING_VISUAL_SEARCH_ENDPOINT` | Azure Bing Visual Search endpoint (Bing only). |
 | `TINEYE_API_URL` / `TINEYE_API_KEY` | TinEye REST credentials (TinEye only). |
@@ -170,6 +172,13 @@ python -c "from insightface.app import FaceAnalysis; print('InsightFace ready')"
 | `MAX_CANDIDATES` | How many search candidates to evaluate (default `20`). |
 | `MAX_IMAGE_BYTES` | Hard download cap per candidate image (default 8 MiB). |
 | `HTTP_TIMEOUT` | Per-request timeout in seconds. |
+| `PIVOT_ENABLED` | Enables public-only identity-pivot query metadata. |
+| `PIVOT_MAX_SITES` | Maximum sites considered by an identity sweep integration. |
+| `PIVOT_TIMEOUT` | Per-site identity-pivot timeout in seconds. |
+| `PIVOT_MAX_WORKERS` | Maximum concurrent identity-pivot workers. |
+| `PIVOT_MAX_ACCOUNTS` | Maximum account matches retained per handle. |
+| `PIVOT_MAX_CANDIDATES` | Maximum harvested candidate images. |
+| `PIVOT_BROWSER_FALLBACK` | Optional browser escalation for public bot-walled pages; disabled by default. |
 | `RPC_URL` | Sepolia JSON-RPC endpoint. |
 | `CHAIN_ID` | `11155111` for Sepolia. |
 | `PRIVATE_KEY` | 0x-prefixed key of a **throwaway testnet** account. Never a real one. |
@@ -221,6 +230,11 @@ Useful flags:
 --threshold 0.5              # override MATCH_THRESHOLD for this run
 --max-candidates 30          # evaluate more search results
 --provider bing              # switch reverse-image-search provider
+--provider cascade           # use configured provider fallbacks
+--context "web3 speaker"    # add runtime context to public-web queries
+--handle supreme__sahil      # record public identity-pivot queries
+--platform linkedin          # scope handle metadata to one platform
+--scene                      # include local scene cues in debug output
 --face-index 1               # choose a specific face when several are detected
 --save-results               # write debug/last_run.json (live data, labelled as a snapshot)
 --no-chain                   # discovery + hashing only, no transaction
