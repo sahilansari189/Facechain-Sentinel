@@ -88,6 +88,8 @@ class PersistentSearchCache:
     survives process restarts and is shared by all workers in the batch.
     """
 
+    CACHE_VERSION = 2
+
     def __init__(self, root: Path = Path("cache") / "searches"):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -115,6 +117,8 @@ class PersistentSearchCache:
                 return None
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
+                if payload.get("version") != self.CACHE_VERSION:
+                    raise ValueError("stale cache version")
                 candidates = payload.get("candidates")
                 if not isinstance(candidates, list):
                     raise ValueError("invalid cache payload")
@@ -128,7 +132,7 @@ class PersistentSearchCache:
     def put(self, digest: str, candidates) -> None:
         path = self._path(digest)
         payload = {
-            "version": 1,
+            "version": self.CACHE_VERSION,
             "sha256": digest,
             "candidates": candidates,
             "saved_at": time.time(),

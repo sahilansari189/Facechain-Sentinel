@@ -201,6 +201,28 @@ def _candidate_page_url(row: Dict, timeout: int = 10) -> str:
     return _resolve_page_url(page_url, timeout=timeout)
 
 
+def _canonical_page_key(url: str) -> str:
+    """Build a stable dedupe key without merging distinct social posts."""
+    value = _clean_url(url)
+    if not value:
+        return ""
+
+    try:
+        parsed = urlparse(value)
+        host = parsed.netloc.lower().removeprefix("www.")
+        path = re.sub(r"/{2,}", "/", parsed.path).rstrip("/").lower()
+
+        # Tracking parameters and image-index query strings should not make
+        # the same social post appear as multiple search results.
+        if host in {"instagram.com", "x.com", "twitter.com", "linkedin.com"}:
+            return f"{host}{path}"
+
+        query = f"?{parsed.query}" if parsed.query else ""
+        return f"{host}{path}{query}"
+    except Exception:
+        return value.lower()
+
+
 def dedupe(
     candidates: List[Candidate]
 ) -> List[Candidate]:
@@ -233,7 +255,7 @@ def dedupe(
                 index
                 for index, previous in enumerate(best)
                 if (
-                    (page and clean(previous.url) == page)
+                    (page and _canonical_page_key(previous.url) == _canonical_page_key(page))
                     or (image and clean(previous.image_url) == image)
                 )
             ),

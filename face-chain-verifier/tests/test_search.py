@@ -13,6 +13,7 @@ from src.search.reverse_search import (  # noqa: E402
     Candidate,
     SearchError,
     SerpApiGoogleLensProvider,
+    dedupe,
 )
 
 
@@ -81,3 +82,27 @@ def test_build_post_record_shape():
     assert rec["title"] == "Real title"
     assert rec["description"] == "caption"
     assert rec["retrieved_at"].endswith("+00:00")
+
+
+def test_dedupe_collapses_social_url_variants_but_keeps_distinct_posts():
+    candidates = [
+        Candidate(
+            url="https://www.instagram.com/p/ABC123/?utm_source=lens",
+            image_url="https://cdn.test/one.jpg",
+        ),
+        Candidate(
+            url="https://instagram.com/p/ABC123/?img_index=1",
+            image_url="https://cdn.test/one.jpg",
+        ),
+        Candidate(
+            url="https://www.instagram.com/p/XYZ789/",
+            image_url="https://cdn.test/two.jpg",
+        ),
+    ]
+
+    result = dedupe(candidates)
+
+    assert [candidate.url for candidate in result] == [
+        "https://www.instagram.com/p/ABC123/?utm_source=lens",
+        "https://www.instagram.com/p/XYZ789/",
+    ]
