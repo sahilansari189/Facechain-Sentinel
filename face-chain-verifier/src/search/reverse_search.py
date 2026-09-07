@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -352,6 +353,36 @@ class ReverseImageSearchProvider:
 # SerpApi Google Lens
 # ============================================================
 
+def _prepare_serpapi_image_data(path: str) -> bytes:
+    """Convert the local image to a baseline JPEG under SerpApi's limit."""
+    import os
+    from io import BytesIO
+    from PIL import Image
+
+    if os.path.getsize(path) <= 500_000:
+        try:
+            with Image.open(path) as image:
+                if image.format == "JPEG" and image.mode == "RGB":
+                    return Path(path).read_bytes()
+        except Exception:
+            pass
+
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+        quality = 90
+        while quality >= 30:
+            buffer = BytesIO()
+            rgb.save(buffer, format="JPEG", quality=quality)
+            data = buffer.getvalue()
+            if len(data) <= 500_000:
+                return data
+            quality -= 10
+
+        resized = rgb.resize((max(1, rgb.width // 2), max(1, rgb.height // 2)))
+        buffer = BytesIO()
+        resized.save(buffer, format="JPEG", quality=85)
+        return buffer.getvalue()
+
 
 class SerpApiGoogleLensProvider(
     ReverseImageSearchProvider
@@ -648,39 +679,38 @@ class SerpApiGoogleLensProvider(
             )
 
         try:
+            image_data = _prepare_serpapi_image_data(path)
+        except Exception:
+            with open(path, "rb") as fh:
+                image_data = fh.read()
 
-            with open(
-                path,
-                "rb",
-            ) as fh:
-
+        response = None
+        import time
+        for attempt in range(3):
+            try:
                 response = requests.post(
                     self.image_endpoint,
-                    files={
-                        "image": (
-                            os.path.basename(path),
-                            fh,
-                        )
-                    },
-                    data={
-                        "api_key": self.api_key,
-                    },
-                    headers={
-                        "User-Agent":
-                            "face-chain-verifier/1.0"
-                    },
+                    files={"image": ("image.jpg", image_data, "image/jpeg")},
+                    data={"api_key": self.api_key},
+                    headers={"User-Agent": "face-chain-verifier/1.0"},
                     timeout=self.timeout,
                 )
+                if response.status_code == 429 and attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                break
+            except requests.RequestException as exc:
+                if attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                raise SearchError(
+                    f"serpapi image upload failed: {exc}"
+                ) from exc
 
-        except requests.RequestException as exc:
-
-            raise SearchError(
-                f"serpapi image upload failed: "
-                f"{exc}"
-            ) from exc
+        if response is None:
+            raise SearchError("serpapi image upload failed: no response")
 
         if response.status_code >= 400:
-
             raise SearchError(
                 "serpapi image upload failed: "
                 f"HTTP {response.status_code}: "
@@ -756,10 +786,12 @@ class SerpApiGoogleLensProvider(
 
             params = {
                 "engine": "google_lens",
-                "type": search_type,
                 "image_id": image_id,
                 "api_key": self.api_key,
             }
+
+            if search_type:
+                params["type"] = search_type
 
             country = (
                 self.options.get("country")
@@ -805,25 +837,38 @@ class SerpApiGoogleLensProvider(
                     f"serpapi: {data['error']}"
                 )
 
-            rows = (
-                data.get(search_type)
-                or []
-            )
+            if search_type:
+                typed_rows = [
+                    (row, search_type)
+                    for row in (data.get(search_type) or [])
+                    if isinstance(row, dict)
+                ]
+            else:
+                typed_rows = (
+                    [
+                        (row, "exact_matches")
+                        for row in (data.get("exact_matches") or [])
+                        if isinstance(row, dict)
+                    ]
+                    + [
+                        (row, "visual_matches")
+                        for row in (data.get("visual_matches") or [])
+                        if isinstance(row, dict)
+                    ]
+                    + [
+                        (row, "image_sources")
+                        for row in (data.get("image_sources") or [])
+                        if isinstance(row, dict)
+                    ]
+                )
 
             out: List[Candidate] = []
 
-            for row in rows:
-
-                if not isinstance(
-                    row,
-                    dict,
-                ):
-                    continue
-
+            for row, search_result_type in typed_rows:
                 candidate = (
                     self._candidate_from_row(
                         row,
-                        search_type,
+                        search_result_type,
                     )
                 )
 
@@ -835,10 +880,19 @@ class SerpApiGoogleLensProvider(
 
             return out
 
-        # Exact-first: avoid the visual request when exact results are
-        # already sufficient for identity verification.
-        exact = search_type_by_id("exact_matches")
-        combined = dedupe(exact)
+        # Ask Lens for its complete result set first. Some image IDs return
+        # visual matches only when the type parameter is omitted.
+        try:
+            combined = dedupe(search_type_by_id(""))
+        except SearchError:
+            combined = []
+
+        if not combined:
+            try:
+                exact = search_type_by_id("exact_matches")
+            except SearchError:
+                exact = []
+            combined = dedupe(exact)
 
         try:
             exact_min = max(
@@ -849,8 +903,12 @@ class SerpApiGoogleLensProvider(
             exact_min = 3
 
         if len(combined) < exact_min:
-            visual = search_type_by_id("visual_matches")
-            combined = dedupe(combined + visual)
+            try:
+                visual = search_type_by_id("visual_matches")
+                combined = dedupe(combined + visual)
+            except SearchError:
+                if not combined:
+                    raise
 
         try:
             fallback_min = max(

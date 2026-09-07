@@ -1068,7 +1068,7 @@ class TargetURLProvider(SearchProvider):
         # media.licdn.com images + associate profile slugs)
         if "linkedin.com" in domain and "/posts/" in self.target_url:
             try:
-                from app.linkedin import harvest_linkedin_post, is_linkedin_post_url
+                from src.search.linkedin import harvest_linkedin_post, is_linkedin_post_url
                 if is_linkedin_post_url(self.target_url):
                     candidates = harvest_linkedin_post(
                         self.target_url, timeout=self._timeout, max_photos=4
@@ -1852,9 +1852,27 @@ class LinkedInPostProvider(SearchProvider):
         if not valid_contexts and contexts:
             valid_contexts = contexts[:2]
 
+        topic_queries: list[str] = []
+        for context in valid_contexts:
+            lowered = context.lower()
+            hazard = re.search(r"hackhazards?\s*([0-9]+)", lowered)
+            if hazard:
+                topic_queries.append(
+                    f"hackhazards{hazard.group(1)} namespace hackathon"
+                )
+            elif "namespace" in lowered and "hack" in lowered:
+                topic_queries.append("namespace hackathon")
+
         for name in names:
             for ctx in valid_contexts:
                 raw_queries.append(f"site:linkedin.com/posts/ {name} {ctx}")
+                raw_queries.append(f"site:linkedin.com/posts/{name}_ {ctx}")
+            for topic in topic_queries:
+                raw_queries.append(f"site:linkedin.com/posts/{name}_ {topic}")
+            # LinkedIn post URLs commonly begin with the author's slug. This
+            # narrows discovery to the account's own posts instead of posts
+            # that merely mention the handle in their text.
+            raw_queries.append(f"site:linkedin.com/posts/{name}_")
             raw_queries.append(f"site:linkedin.com/posts/ {name}")
 
         queries = list(dict.fromkeys(raw_queries))
@@ -1862,21 +1880,19 @@ class LinkedInPostProvider(SearchProvider):
         from concurrent.futures import ThreadPoolExecutor
 
         def _run_query(q: str) -> list[str]:
-            urls = []
+            urls: list[str] = []
             if client is not None:
-                try:
-                    res = client.search({"engine": "duckduckgo", "q": q})
-                    items = res.get("organic_results", [])
-                    if not items:
-                        res = client.search({"engine": "google", "q": q})
-                        items = res.get("organic_results", [])
-                    for it in items:
-                        link = it.get("link", "")
-                        if "linkedin.com/posts/" in link:
-                            clean_url = link.split("?")[0].rstrip("/")
-                            urls.append(clean_url)
-                except Exception:
-                    pass
+                for engine in ("google", "duckduckgo"):
+                    try:
+                        res = client.search({"engine": engine, "q": q})
+                        for it in res.get("organic_results", []):
+                            link = it.get("link", "")
+                            if "linkedin.com/posts/" in link:
+                                clean_url = link.split("?")[0].rstrip("/")
+                                if clean_url not in urls:
+                                    urls.append(clean_url)
+                    except Exception:
+                        continue
             if not urls:
                 try:
                     for it in _safe_ddgs_text(q, max_results=15):
@@ -1925,8 +1941,15 @@ class LinkedInPostProvider(SearchProvider):
                 pass
             return None
 
-        with ThreadPoolExecutor(max_workers=min(len(discovered_urls), 8)) as pool:
-            for cand in pool.map(_fetch_og, sorted(discovered_urls)):
+        ordered_urls = sorted(
+            discovered_urls,
+            key=lambda url: (
+                0 if any(f"/posts/{name.lower()}_" in url.lower() for name in names) else 1,
+                url,
+            ),
+        )[:30]
+        with ThreadPoolExecutor(max_workers=min(len(ordered_urls), 8)) as pool:
+            for cand in pool.map(_fetch_og, ordered_urls):
                 if cand:
                     candidates.append(cand)
 

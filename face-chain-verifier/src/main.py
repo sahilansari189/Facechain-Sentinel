@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import textwrap
 import tempfile
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
@@ -384,6 +386,88 @@ def _search_free_multiengine(image_path, cfg, face_bbox=None, image=None):
     ]
 
 
+def _search_linkedin_posts(handle: str, cfg) -> list[Candidate]:
+    """Find public LinkedIn posts for an analyst-supplied handle."""
+    from src.search.free_search import LinkedInPostProvider
+
+    provider = LinkedInPostProvider(
+        api_key=cfg.search_api_key,
+        timeout=float(cfg.http_timeout),
+        allow_free=True,
+    )
+    contexts = [cfg.search_context] if cfg.search_context else []
+    result = provider.search_leads([handle], contexts=contexts)
+
+    return [
+        Candidate(
+            url=item.source_url,
+            title=item.title,
+            source=item.domain or "linkedin.com",
+            image_url=item.image_url,
+            search_type="linkedin_posts",
+        )
+        for item in result.candidates
+        if item.source_url and item.image_url
+    ]
+
+
+def _linkedin_handles_from_candidates(candidates: list[Candidate]) -> list[str]:
+    """Extract public LinkedIn profile handles returned by visual search."""
+    handles: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        match = re.search(
+            r"linkedin\.com/in/([A-Za-z0-9_-]{3,60})",
+            candidate.url or "",
+            re.IGNORECASE,
+        )
+        if match:
+            handle = match.group(1).lower()
+            if handle not in seen:
+                seen.add(handle)
+                handles.append(handle)
+    return handles[:3]
+
+
+def _search_linkedin_posts_for_handles(
+    handles: list[str],
+    cfg,
+    contexts: list[str] | None = None,
+) -> list[Candidate]:
+    """Find public LinkedIn posts for several discovered profile handles."""
+    if not handles:
+        return []
+
+    from src.search.free_search import LinkedInPostProvider
+
+    provider = LinkedInPostProvider(
+        api_key=cfg.search_api_key,
+        timeout=float(cfg.http_timeout),
+        allow_free=True,
+    )
+    search_contexts = list(contexts or [])
+    if cfg.search_context:
+        search_contexts.append(cfg.search_context)
+    result = provider.search_leads(handles, contexts=search_contexts)
+    seen_urls: set[str] = set()
+    candidates: list[Candidate] = []
+    for item in result.candidates:
+        url = item.source_url.split("?", 1)[0].rstrip("/")
+        if not url or url in seen_urls or not item.image_url:
+            continue
+        seen_urls.add(url)
+        candidates.append(
+            Candidate(
+                url=url,
+                title=item.title,
+                source=item.domain or "linkedin.com",
+                image_url=item.image_url,
+                search_type="linkedin_posts",
+            )
+        )
+    return candidates
+
+
 # ============================================================
 # Debug output
 # ============================================================
@@ -561,6 +645,26 @@ def _source_image_url(page_meta, page_url: str) -> str:
             ):
                 return value
     return ""
+
+
+def _is_linkedin_post_url(url: str) -> bool:
+    """Return whether a URL points to a LinkedIn post, not a profile."""
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return False
+    host = parsed.netloc.lower().removeprefix("www.")
+    return host.endswith("linkedin.com") and "/posts/" in parsed.path.lower()
+
+
+def _is_linkedin_profile_url(url: str) -> bool:
+    """Return whether a URL points to a LinkedIn member profile."""
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return False
+    host = parsed.netloc.lower().removeprefix("www.")
+    return host.endswith("linkedin.com") and "/in/" in parsed.path.lower()
 
 
 # ============================================================
@@ -994,8 +1098,11 @@ def run_single(args, cfg) -> int:
                         "Search upload",
                         "SerpApi direct local upload",
                     )
-            except SearchError:
-                # Preserve the existing public-URL fallback.
+            except SearchError as exc:
+                warn(
+                    f"SerpApi direct local upload failed ({exc}); "
+                    "trying URL upload / fallback..."
+                )
                 candidates = None
 
         if candidates is None:
@@ -1055,6 +1162,39 @@ def run_single(args, cfg) -> int:
             )
 
             return 3
+
+        discovered_handles = _linkedin_handles_from_candidates(candidates)
+        if discovered_handles:
+            try:
+                discovered_contexts = [
+                    candidate.title
+                    for candidate in candidates
+                    if _is_linkedin_profile_url(candidate.url) and candidate.title
+                ][:3]
+                linkedin_candidates = _search_linkedin_posts_for_handles(
+                    discovered_handles,
+                    cfg,
+                    contexts=discovered_contexts,
+                )
+                if linkedin_candidates:
+                    selected_linkedin_candidates = linkedin_candidates[:30]
+                    candidates = selected_linkedin_candidates + candidates
+                    ok(
+                        f"Added {len(selected_linkedin_candidates)} posts from discovered LinkedIn profiles"
+                    )
+            except Exception as exc:
+                warn(f"Automatic LinkedIn post pivot unavailable: {exc}")
+
+        if args.handle and args.platform == "linkedin":
+            try:
+                linkedin_candidates = _search_linkedin_posts(args.handle, cfg)
+                if linkedin_candidates:
+                    candidates = linkedin_candidates + candidates
+                    ok(
+                        f"Added {len(linkedin_candidates)} targeted LinkedIn post candidates"
+                    )
+            except Exception as exc:
+                warn(f"LinkedIn post pivot unavailable: {exc}")
 
         ok(
             f"Found {len(candidates)} unique candidates"
@@ -1127,6 +1267,7 @@ def run_single(args, cfg) -> int:
             candidate.url,
             cfg.http_timeout,
         )
+        linkedin_post = _is_linkedin_post_url(display_page_url)
 
         print(
             f"    Page URL : "
@@ -1340,6 +1481,12 @@ def run_single(args, cfg) -> int:
                                 "    og:image -> "
                                 "no face detected"
                             )
+                            if linkedin_post:
+                                best_sim = -1.0
+                                best_data = None
+                                best_faces = 0
+                                best_url = ""
+                                best_source = ""
 
                         else:
 
@@ -1358,21 +1505,15 @@ def run_single(args, cfg) -> int:
                                 f"({len(og_faces)} face(s))"
                             )
 
-                            # Prefer a verified image fetched from the source page
-                            # over SerpApi's temporary Lens proxy.  It is acceptable
-                            # for its score to be lower than the proxy as long as it
-                            # independently clears the configured match threshold.
-                            if og_sim >= cfg.match_threshold:
-
+                            # For LinkedIn posts, the page image is the actual
+                            # post media. Lens may return the author's profile
+                            # portrait for the same post, which must not win.
+                            if _is_linkedin_post_url(display_page_url) or og_sim >= best_sim:
                                 best_sim = og_sim
                                 best_data = og_data
-                                best_faces = len(
-                                    og_faces
-                                )
+                                best_faces = len(og_faces)
                                 best_url = og_image
-                                best_source = (
-                                    "og_image"
-                                )
+                                best_source = "og_image"
 
                     except (
                         FetchError,
@@ -1387,6 +1528,12 @@ def run_single(args, cfg) -> int:
                             f"    og:image -> "
                             f"unavailable ({exc})"
                         )
+                        if linkedin_post:
+                            best_sim = -1.0
+                            best_data = None
+                            best_faces = 0
+                            best_url = ""
+                            best_source = ""
 
             else:
 
@@ -1394,6 +1541,12 @@ def run_single(args, cfg) -> int:
                     "    og:image : "
                     "not available"
                 )
+                if linkedin_post:
+                    best_sim = -1.0
+                    best_data = None
+                    best_faces = 0
+                    best_url = ""
+                    best_source = ""
 
         # ----------------------------------------------------
         # Candidate result

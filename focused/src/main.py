@@ -1091,6 +1091,7 @@ def run_single(args, cfg) -> int:
                     item for item in pivot_candidates
                     if (item.url, item.image_url) not in known
                 ]
+                candidates = candidates[:cfg.max_candidates]
                 debug["identity_pivot"]["accounts_found"] = (
                     pivot_result.raw_response or {}
                 ).get("hits_count", 0)

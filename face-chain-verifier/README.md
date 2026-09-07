@@ -226,17 +226,7 @@ python src/main.py --image examples/input.jpg
 Useful flags:
 
 ```bash
---image-url https://...      # skip the temporary upload; use an image you already host
---threshold 0.5              # override MATCH_THRESHOLD for this run
---max-candidates 30          # evaluate more search results
---provider bing              # switch reverse-image-search provider
---provider cascade           # use configured provider fallbacks
---context "web3 speaker"    # add runtime context to public-web queries
---handle supreme__sahil      # record public identity-pivot queries
---platform linkedin          # scope handle metadata to one platform
---scene                      # include local scene cues in debug output
---face-index 1               # choose a specific face when several are detected
---save-results               # write debug/last_run.json (live data, labelled as a snapshot)
+--image-url https://...      # skip the temporary upload; use an image you  as a snapshot)
 --no-chain                   # discovery + hashing only, no transaction
 ```
 

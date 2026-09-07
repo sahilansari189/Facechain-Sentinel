@@ -9,7 +9,7 @@ from pathlib import Path
 try:  # optional at import time so unit tests never require the package
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 except Exception:  # pragma: no cover
     pass
 
