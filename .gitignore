@@ -179,3 +179,19 @@ config.local.*
 *~
 
 /.output
+focused/examples/random6.png
+focused/examples/r.jpg
+focused/examples/ra.jpg
+focused/examples/raa.jpg
+focused/examples/raaa.jpg
+focused/examples/ran.jpg
+focused/examples/random4.jpg
+focused/examples/random5.jpg
+face-chain-verifier/examples/r.jpg
+face-chain-verifier/examples/ra.jpg
+face-chain-verifier/examples/raa.jpg
+face-chain-verifier/examples/raaa.jpg
+face-chain-verifier/examples/ran.jpg
+face-chain-verifier/examples/random4.jpg
+face-chain-verifier/examples/random5.jpg
+face-chain-verifier/examples/random6.png

@@ -78,8 +78,7 @@ BLOCKED_KEYWORDS = {
 
 SOCIAL_DOMAINS = [
     "x.com", "twitter.com", "instagram.com", "linkedin.com", "reddit.com",
-    "facebook.com", "threads.net", "youtube.com", "github.com", "pinterest.com",
-    "tiktok.com", "medium.com", "quora.com"
+    "facebook.com", "threads.net", "youtube.com", "github.com", "pinterest.com", "medium.com", "quora.com"
 ]
 
 
